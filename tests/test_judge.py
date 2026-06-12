@@ -15,16 +15,17 @@ def test_build_prompt_includes_the_pieces():
         good=None,
         recreated="short summary",
     )
-    assert "too verbose" in p
-    assert "here is a very long summary" in p
-    assert "short summary" in p
-    assert "IDEAL" not in p  # no good response provided
+    assert "<user-feedback>\ntoo verbose\n</user-feedback>" in p
+    assert "<bad-response>\nhere is a very long summary\n</bad-response>" in p
+    assert "<new-response>\nshort summary\n</new-response>" in p
+    assert (
+        "<ideal-response>\n" not in p
+    )  # no ideal-response block (only the instruction mentions the tag)
 
 
 def test_build_prompt_includes_ideal_when_present():
     p = judge.build_prompt("fb", "prompt", "bad", "THE IDEAL ANSWER", "regen")
-    assert "IDEAL" in p
-    assert "THE IDEAL ANSWER" in p
+    assert "<ideal-response>\nTHE IDEAL ANSWER\n</ideal-response>" in p
 
 
 def test_parse_json_plain():

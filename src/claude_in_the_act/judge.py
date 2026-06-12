@@ -31,21 +31,25 @@ def build_prompt(
     feedback: str, user_prompt: str, bad: str, good: str | None, recreated: str
 ) -> str:
     parts = [
-        "You are a strict, calibrated judge. Decide how much a REGENERATED "
-        "assistant response improves on an ORIGINAL one, according to specific "
-        "feedback the user gave about why the original was bad.",
-        f"\n## The user's prompt\n{user_prompt}",
-        f"\n## ORIGINAL response (the user marked this BAD)\n{bad}",
-        f"\n## The user's FEEDBACK on why it was bad\n{feedback}",
+        "You are a strict, calibrated judge of LLM responses. The user marked a "
+        "previous LLM response as BAD and gave feedback about why it was bad; they "
+        "may also have rewritten it into the response they wanted. Read the "
+        "original (bad) response (in <bad-response> tags), the user's feedback (in "
+        "<user-feedback> tags), and the user's rewritten response if available (in "
+        "<ideal-response> tags). Then read the assistant's NEW response (in "
+        "<new-response> tags) and judge (0-10) whether the new response is better "
+        "in the ways the user described.",
+        f"\n\n<user-prompt>\n{user_prompt}\n</user-prompt>",
+        f"\n\n<bad-response>\n{bad}\n</bad-response>",
+        f"\n\n<user-feedback>\n{feedback}\n</user-feedback>",
     ]
     if good:
-        parts.append(
-            f"\n## The user's IDEAL response (what they actually wanted)\n{good}"
-        )
-    parts.append(f"\n## REGENERATED response (a newer model / harness)\n{recreated}")
+        parts.append(f"\n\n<ideal-response>\n{good}\n</ideal-response>")
+    parts.append(f"\n\n<new-response>\n{recreated}\n</new-response>")
     parts.append(
-        "\n## Task\nScore 0-10 how much better the REGENERATED response is than the "
-        "ORIGINAL **specifically at addressing the user's feedback**"
+        "\n\n## Task\nScore 0-10 how much better the NEW response (<new-response>) "
+        "is than the BAD one (<bad-response>), **specifically at addressing the "
+        "user's feedback**"
         + (" and matching their ideal response" if good else "")
         + ". 0 = no better, or worse; 5 = partially addresses the feedback; "
         "10 = fully fixes exactly what the user disliked, with no regressions.\n"
