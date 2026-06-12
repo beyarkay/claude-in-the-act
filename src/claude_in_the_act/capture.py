@@ -133,6 +133,17 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
     with out.open("a") as f:
         f.write(json.dumps(annotation) + "\n")
 
+    # Human-editable sidecar: your feedback + a slot to hand-write the response
+    # you actually wanted (the eval's gold target).
+    sidecar = base.with_suffix(".feedback.md")
+    sidecar.write_text(
+        "<!-- claude-in-the-act: your feedback + the response you wanted. "
+        "Edit freely; everything under 'Good response' is yours to fill. -->\n\n"
+        f"# Feedback\n\n{critique}\n\n"
+        "# Good response\n\n"
+        "<!-- Write the response you actually wanted, below this line. -->\n\n"
+    )
+
     records = sum(1 for _ in out.open())
     patch_note = " +patch" if git_info["patchFile"] else ""
     feedback = " ".join(critique.split())
@@ -141,8 +152,9 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
     project = DEFAULT_DATA_DIR.parent
     return 2, (
         f'✎ BAD response captured — feedback: "{feedback}"\n'
-        f"  bundle:  {out.resolve()} ({records} records{patch_note})\n"
-        f"  re-run:  uv run --project {project} cita-recreate {out.resolve()}"
+        f"  bundle:    {out.resolve()} ({records} records{patch_note})\n"
+        f"  good resp: {sidecar.resolve()}  ← hand-write what you wanted here\n"
+        f"  re-run:    uv run --project {project} cita-recreate {out.resolve()}"
     )
 
 

@@ -348,10 +348,10 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
             pass
 
     result = {
+        "model": model,
+        "prompt": prompt,
         "original": original,
         "recreated": recreated,
-        "prompt": prompt,
-        "model": model,
         "source": source,
         "returncode": proc.returncode,
         "stderr": proc.stderr[-2000:],
@@ -418,10 +418,10 @@ def recreate(stored: Path, model_override: str | None = None) -> dict[str, str]:
         shutil.rmtree(replay_dir, ignore_errors=True)
 
     return {
+        "model": model,
+        "prompt": prompt,
         "original": original,
         "recreated": recreated,
-        "prompt": prompt,
-        "model": model,
     }
 
 
