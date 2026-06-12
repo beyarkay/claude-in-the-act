@@ -30,63 +30,107 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from claude_in_the_act.replay import build_recording
+from claude_in_the_act.transcript import split_transcript
+
 
 def _slug(path: str) -> str:
     """Mirror Claude Code's cwd → project-dir slug (non-alphanumeric → '-')."""
     return re.sub(r"[^A-Za-z0-9]", "-", path)
 
 
-def _assistant_text(rec: dict) -> str | None:
-    if rec.get("type") != "assistant":
-        return None
-    content = rec.get("message", {}).get("content")
-    if not isinstance(content, list):
-        return None
-    return "\n".join(
-        b.get("text", "") for b in content if b.get("type") == "text"
-    ).strip()
+def _cita_root() -> Path:
+    return Path(__file__).resolve().parents[2]
 
 
-def _user_text(rec: dict) -> str | None:
-    if rec.get("type") != "user":
-        return None
-    content = rec.get("message", {}).get("content")
-    return content if isinstance(content, str) else None
+def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict:
+    """Replay a tool-using turn with tools ON but every tool call served from the
+    RECORDING (no codebase, no execution).
 
-
-def split_transcript(recs: list[dict]) -> dict:
-    """Split records into the replay inputs.
-
-    Drops any ``bad_annotation``, finds the last string user turn (the prompt to
-    replay), the original assistant response that followed it, the context
-    before it, and the model id. Raises ValueError if there is no user turn.
+    Sets up a temp replay dir with `.claude/settings.json` PreToolUse hooks that
+    intercept Read/Bash/Write/Edit and feed back the recorded results (see
+    `claude_in_the_act.replay`). The model re-runs against the recording; calls
+    that don't match a recorded one are denied and logged as divergences.
     """
-    recs = [r for r in recs if r.get("type") != "bad_annotation"]
-    user_idxs = [i for i, r in enumerate(recs) if _user_text(r) is not None]
-    if not user_idxs:
-        raise ValueError("no string user turn found to replay")
-    last_user = user_idxs[-1]
+    recs = [
+        json.loads(line) for line in stored.read_text().splitlines() if line.strip()
+    ]
+    split = split_transcript(recs)
+    recording = build_recording(recs)
+    prompt, original = split["prompt"], split["original"]
+    model = model_override or split["model"]
 
-    # The original response is ALL assistant text after the prompt (a turn can
-    # span several records: thinking-only / tool_use-only ones have no text and
-    # must be skipped, not treated as the answer).
-    original = "\n\n".join(
-        t for r in recs[last_user + 1 :] if (t := _assistant_text(r))
-    ).strip()
-    model = next(
-        (
-            r["message"]["model"]
-            for r in reversed(recs)
-            if r.get("type") == "assistant" and r.get("message", {}).get("model")
-        ),
-        "",
+    replay_dir = Path(tempfile.mkdtemp()).resolve()
+    stash = replay_dir / "_stash"
+    stash.mkdir()
+    (replay_dir / "recording.json").write_text(json.dumps(recording))
+
+    venv_py = _cita_root() / ".venv" / "bin" / "python"
+    hook_cmd = (
+        f"CITA_RECORDING={replay_dir}/recording.json CITA_STASH={stash} "
+        f"{venv_py} -m claude_in_the_act.replay"
     )
-    return {
-        "prompt": _user_text(recs[last_user]) or "",
-        "original": original,
-        "context": recs[:last_user],
-        "model": model,
+    settings = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "Read|Bash|Write|Edit",
+                    "hooks": [{"type": "command", "command": hook_cmd}],
+                }
+            ]
+        }
     }
+    claude_dir = replay_dir / ".claude"
+    claude_dir.mkdir()
+    (claude_dir / "settings.json").write_text(json.dumps(settings))
+
+    # Restore prior conversation via --resume; but a single-turn capture has no
+    # messages before the prompt, and `--resume` rejects an empty session — so
+    # run a fresh `claude -p` in that case.
+    has_convo = any(r.get("type") in ("user", "assistant") for r in split["context"])
+    tool_args = ["--allowed-tools", "Read", "Bash", "Write", "Edit"]
+    base = ["-p", prompt, "--output-format", "json", "--model", model, *tool_args]
+    proj = Path.home() / ".claude" / "projects" / _slug(str(replay_dir))
+    planted = None
+    if has_convo:
+        proj.mkdir(parents=True, exist_ok=True)
+        new_id = str(uuid.uuid4())
+        planted = proj / f"{new_id}.jsonl"
+        planted.write_text("".join(json.dumps(r) + "\n" for r in split["context"]))
+        cmd = ["claude", "--resume", new_id, "--fork-session", *base]
+    else:
+        cmd = ["claude", *base]
+
+    proc = subprocess.run(cmd, cwd=replay_dir, capture_output=True, text=True)
+    recreated = ""
+    if proc.stdout.strip():
+        try:
+            recreated = json.loads(proc.stdout).get("result", "")
+        except json.JSONDecodeError:
+            recreated = ""
+    if planted is not None:
+        planted.unlink(missing_ok=True)
+        try:
+            proj.rmdir()
+        except OSError:
+            pass
+
+    log_path = stash / "replay.log"
+    replay_log = log_path.read_text() if log_path.exists() else ""
+    result = {
+        "original": original,
+        "recreated": recreated,
+        "prompt": prompt,
+        "model": model,
+        "replay_log": replay_log,
+        "returncode": proc.returncode,
+        "stderr": proc.stderr[-2000:],
+        "stdout_head": proc.stdout[:500],
+        "replay_dir": str(replay_dir),
+    }
+    if recreated and replay_log:
+        shutil.rmtree(replay_dir, ignore_errors=True)  # only clean on success
+    return result
 
 
 def recreate(stored: Path, model_override: str | None = None) -> dict[str, str]:
