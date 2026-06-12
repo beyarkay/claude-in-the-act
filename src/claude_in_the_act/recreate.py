@@ -1,44 +1,46 @@
-"""Replay a stored transcript and regenerate its final assistant turn.
+"""Regenerate a captured bad response under the current harness/model.
 
-Runs an independent headless Claude Code session (``claude --resume
---fork-session``) to reproduce the last assistant response, so it can be compared
-against the original (bad) one — e.g. to see whether a newer model does better.
+Two paths, both driven by ``cita-judge``:
 
-Self-contained: it strips the trailing ``bad_annotation``, drops the final
-assistant turn (the bad one) and the final user turn, restores the remaining
-context, and re-issues the final user message as the prompt. The replay runs
-from an isolated temp dir, so it never depends on the original working tree
-still existing. The harness rebuilds the system prompt + tool schemas fresh at
-launch, so the replay tracks the *current* harness/model.
+- ``recreate`` — tool-free turns: restore the pre-prompt context in an isolated
+  temp session and re-issue the final user message with tools off. Self-contained.
+- ``recreate_with_tools`` — tool-using turns: reconstruct the real repo (a
+  detached ``git worktree`` off the local repo, fallback to a clone), undo the
+  bad turn's own Write/Edit so the model meets the genuine pre-turn state, rewrite
+  the resumed context's paths into the reconstruction, and run real tools there.
 
-Tools are disabled by default (pure-text regen, no side effects). Set
-``ALLOW_TOOLS=1`` to keep tools on — but then the model's calls actually execute
-and read the *current* filesystem, so only do that for a reconstructed tree.
-
-``split_transcript()`` (pure) is unit-tested; ``recreate()`` adds the claude call.
+The pure pieces (``split_transcript``, ``undo_last_turn``, ``reconstruct``) are
+unit-tested; the ``recreate*`` entry points add the ``claude`` call.
 """
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shutil
-import subprocess
+import sys
 import tempfile
 import uuid
 from pathlib import Path
 
-from claude_in_the_act.transcript import denumber, split_transcript, user_text
+from claude_in_the_act.harness import WORKTREE_LOCK, git, run_claude
+from claude_in_the_act.transcript import (
+    ANNOTATION_TYPE,
+    annotation as bundle_annotation,
+    denumber,
+    dump_jsonl,
+    load_bundle,
+    split_transcript,
+    user_text,
+)
+
+# Tools the reconstructed (real-repo) replay is allowed to run.
+REPLAY_TOOLS = ["Read", "Edit", "Write", "Bash", "Grep", "Glob"]
 
 
 def _slug(path: str) -> str:
     """Mirror Claude Code's cwd → project-dir slug (non-alphanumeric → '-')."""
     return re.sub(r"[^A-Za-z0-9]", "-", path)
-
-
-def _git(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], capture_output=True, text=True)
 
 
 _MUTATOR_TOKENS = (
@@ -107,7 +109,7 @@ def undo_last_turn(recs: list[dict], repo: Path) -> dict:
     Flags Bash commands that could have mutated the tree (those can't be reversed
     from the transcript). Returns {preTurnExact, undone, bashMutations}.
     """
-    recs_na = [r for r in recs if r.get("type") != "bad_annotation"]
+    recs_na = [r for r in recs if r.get("type") != ANNOTATION_TYPE]
     orig_cwd = next((r.get("cwd") for r in reversed(recs_na) if r.get("cwd")), None)
     user_idxs = [i for i, r in enumerate(recs_na) if user_text(r) is not None]
     if not user_idxs:
@@ -122,13 +124,16 @@ def undo_last_turn(recs: list[dict], repo: Path) -> dict:
         content = (r.get("message") or {}).get("content")
         if r.get("type") == "assistant" and isinstance(content, list):
             for b in content:
-                if b.get("type") == "tool_use" and b.get("name") == "Read":
-                    read_files[b["id"]] = b["input"].get("file_path")
-                elif b.get("type") == "tool_use" and b.get("name") == "Write":
-                    prior[b["input"].get("file_path")] = b["input"].get("content", "")
+                if not isinstance(b, dict) or b.get("type") != "tool_use":
+                    continue
+                inp = b.get("input") or {}
+                if b.get("name") == "Read":
+                    read_files[b.get("id")] = inp.get("file_path")
+                elif b.get("name") == "Write" and inp.get("file_path"):
+                    prior[inp["file_path"]] = inp.get("content", "")
         if r.get("type") == "user" and isinstance(content, list):
             for b in content:
-                if b.get("type") == "tool_result":
+                if isinstance(b, dict) and b.get("type") == "tool_result":
                     fp = read_files.get(b.get("tool_use_id"))
                     rc = b.get("content")
                     if fp and isinstance(rc, str):
@@ -139,7 +144,7 @@ def undo_last_turn(recs: list[dict], repo: Path) -> dict:
         if r.get("type") == "assistant":
             for b in (r.get("message") or {}).get("content") or []:
                 if isinstance(b, dict) and b.get("type") == "tool_use":
-                    calls.append((b["name"], b["input"]))
+                    calls.append((b.get("name"), b.get("input") or {}))
 
     undone: list[str] = []
     bash_mutations: list[str] = []
@@ -165,10 +170,10 @@ def undo_last_turn(recs: list[dict], repo: Path) -> dict:
                 undone.append(f"Write(restore) {fp}")
             elif (
                 rel
-                and _git("-C", str(repo), "cat-file", "-e", f"HEAD:{rel}").returncode
+                and git("-C", str(repo), "cat-file", "-e", f"HEAD:{rel}").returncode
                 == 0
             ):
-                show = _git("-C", str(repo), "show", f"HEAD:{rel}")
+                show = git("-C", str(repo), "show", f"HEAD:{rel}")
                 if show.returncode == 0:
                     target.write_text(show.stdout)
                     undone.append(f"Write(HEAD) {fp}")
@@ -196,41 +201,44 @@ def reconstruct(annotation: dict, patch_path: Path | None, dest: Path) -> str:
     raises if the SHA is unreachable. Worktree sources must be released by the
     caller with ``release_worktree``.
     """
-    git = annotation.get("git") or {}
-    sha = git.get("sha")
+    git_info = annotation.get("git") or {}
+    sha = git_info.get("sha")
     if not sha:
         raise RuntimeError("capture has no git SHA — cannot reconstruct")
     cwd = annotation.get("cwd")
     source = None
 
-    # Fast path: a worktree off the local repo, if it still has the SHA.
+    # Fast path: a detached worktree off the local repo, if it still has the SHA.
     if (
         cwd
         and Path(cwd).is_dir()
-        and _git("-C", cwd, "rev-parse", "--git-dir").returncode == 0
-        and _git("-C", cwd, "cat-file", "-e", sha).returncode == 0
-        and _git("-C", cwd, "worktree", "add", "--detach", str(dest), sha).returncode
-        == 0
+        and git("-C", cwd, "rev-parse", "--git-dir").returncode == 0
+        and git("-C", cwd, "cat-file", "-e", sha).returncode == 0
     ):
-        source = f"worktree:{cwd}"
+        with WORKTREE_LOCK:  # `git worktree add` on one repo isn't concurrency-safe
+            if (
+                git("-C", cwd, "worktree", "add", "--detach", str(dest), sha).returncode
+                == 0
+            ):
+                source = f"worktree:{cwd}"
 
     # Fallback: clone the remote (default) or the local path.
     if source is None:
-        for src in [s for s in (git.get("remote"), cwd) if s]:
+        for src in [s for s in (git_info.get("remote"), cwd) if s]:
             shutil.rmtree(dest, ignore_errors=True)
-            if _git("clone", "--quiet", src, str(dest)).returncode != 0:
+            if git("clone", "--quiet", src, str(dest)).returncode != 0:
                 continue
             if (
-                _git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
+                git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
                 == 0
             ):
                 source = src
                 break
-            _git(
+            git(
                 "-C", str(dest), "fetch", "--quiet", src, sha
             )  # SHA not in default clone
             if (
-                _git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
+                git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
                 == 0
             ):
                 source = src
@@ -239,15 +247,21 @@ def reconstruct(annotation: dict, patch_path: Path | None, dest: Path) -> str:
         raise RuntimeError(f"could not reconstruct {sha} (worktree + clone failed)")
 
     if patch_path and patch_path.exists():
-        applied = _git("-C", str(dest), "apply", "--whitespace=nowarn", str(patch_path))
+        applied = git("-C", str(dest), "apply", "--whitespace=nowarn", str(patch_path))
         if applied.returncode != 0:
-            _git(
+            applied = git(
                 "-C",
                 str(dest),
                 "apply",
                 "--3way",
                 "--whitespace=nowarn",
                 str(patch_path),
+            )
+        if applied.returncode != 0:
+            print(
+                f"cita: warning: patch {patch_path.name} did not apply cleanly — "
+                f"reconstruction may be missing uncommitted changes",
+                file=sys.stderr,
             )
     return source
 
@@ -256,158 +270,112 @@ def release_worktree(source: str, dest: Path) -> None:
     """Remove a worktree created by ``reconstruct`` (no-op for clone sources)."""
     if source.startswith("worktree:"):
         orig = source[len("worktree:") :]
-        _git("-C", orig, "worktree", "remove", "--force", str(dest))
-        _git("-C", orig, "worktree", "prune")
+        with WORKTREE_LOCK:
+            git("-C", orig, "worktree", "remove", "--force", str(dest))
+            git("-C", orig, "worktree", "prune")
 
 
 def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict:
-    """Replay a tool-using turn against a FULL reconstruction of the original
-    repo, with real tools (no mocking).
-
-    Rebuilds the captured tree (git clone + checkout SHA + git apply patch) into
-    a /tmp dir, then runs ``claude --resume`` there — so the harness sees a real
-    git repo and every tool runs for real against it. Requires git state in the
-    capture (SHA + a reachable remote or local path).
-    """
-    recs = [
-        json.loads(line) for line in stored.read_text().splitlines() if line.strip()
-    ]
+    """Replay a tool-using turn against a FULL reconstruction of the original repo,
+    with real tools (no mocking). Requires git state (SHA + reachable repo)."""
+    stored = Path(stored)
+    recs = load_bundle(stored)
     split = split_transcript(recs)
     prompt, original = split["prompt"], split["original"]
     model = model_override or split["model"]
-    annotation = next(
-        (r for r in reversed(recs) if r.get("type") == "bad_annotation"), {}
-    )
-    patch_path = None
-    pf = (annotation.get("git") or {}).get("patchFile")
-    if pf:
-        patch_path = stored.parent / pf
+    ann = bundle_annotation(recs)
+    pf = (ann.get("git") or {}).get("patchFile")
+    patch_path = stored.parent / pf if pf else None
 
     replay_root = Path(tempfile.mkdtemp()).resolve()
     repo = replay_root / "repo"
-    source = reconstruct(annotation, patch_path, repo)
-    repo = repo.resolve()
-
-    # The patch is post-turn, so the reconstruction includes the bad turn's own
-    # Write/Edit. Reverse them so the model faces the PRE-turn situation.
-    undo = undo_last_turn(recs, repo)
-
-    # Path-rewrite: the resumed context references the ORIGINAL absolute cwd, but
-    # the reconstruction lives elsewhere. Repoint those paths at the worktree so
-    # the model operates there, not (via leaked absolute paths) on the real repo.
-    orig_cwd = annotation.get("cwd")
-
-    def _remap(text: str) -> str:
-        return text.replace(orig_cwd, str(repo)) if orig_cwd else text
-
-    # Single-turn captures have no prior messages; `--resume` rejects an empty
-    # session, so run a fresh `claude -p` in that case.
-    has_convo = any(r.get("type") in ("user", "assistant") for r in split["context"])
-    base = [
-        "-p",
-        _remap(prompt),
-        "--output-format",
-        "json",
-        "--model",
-        model,
-        "--permission-mode",
-        "acceptEdits",
-        "--allowed-tools",
-        "Read",
-        "Edit",
-        "Write",
-        "Bash",
-        "Grep",
-        "Glob",
-    ]
-    proj = Path.home() / ".claude" / "projects" / _slug(str(repo))
+    source = None
+    proj = None
     planted = None
-    if has_convo:
-        proj.mkdir(parents=True, exist_ok=True)
-        new_id = str(uuid.uuid4())
-        planted = proj / f"{new_id}.jsonl"
-        ctx = "".join(json.dumps(r) + "\n" for r in split["context"])
-        planted.write_text(_remap(ctx))
-        cmd = ["claude", "--resume", new_id, "--fork-session", *base]
-    else:
-        cmd = ["claude", *base]
+    try:
+        source = reconstruct(ann, patch_path, repo)
+        repo = repo.resolve()
 
-    proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
-    recreated = ""
-    if proc.stdout.strip():
-        try:
-            recreated = json.loads(proc.stdout).get("result", "")
-        except json.JSONDecodeError:
-            recreated = ""
-    if planted is not None:
-        planted.unlink(missing_ok=True)
-        try:
-            proj.rmdir()
-        except OSError:
-            pass
+        # The patch is post-turn, so the reconstruction includes the bad turn's
+        # own Write/Edit. Reverse them so the model faces the PRE-turn situation.
+        undo = undo_last_turn(recs, repo)
 
-    result = {
-        "model": model,
-        "prompt": prompt,
-        "original": original,
-        "recreated": recreated,
-        "source": source,
-        "returncode": proc.returncode,
-        "stderr": proc.stderr[-2000:],
-        "replay_dir": str(replay_root),
-        "preTurnExact": undo["preTurnExact"],
-        "undone": undo["undone"],
-        "bashMutations": undo["bashMutations"],
-    }
-    # Always release a worktree (it lives in the real repo's .git); keep the
-    # /tmp dir on failure only for clone sources (for debugging).
-    if source.startswith("worktree:"):
-        release_worktree(source, repo)
+        # The resumed context references the ORIGINAL absolute cwd; repoint those
+        # paths at the reconstruction so the model never touches the real repo.
+        orig_cwd = ann.get("cwd")
+
+        def remap(text: str) -> str:
+            return text.replace(orig_cwd, str(repo)) if orig_cwd else text
+
+        # Single-turn captures have no prior messages; `--resume` rejects an empty
+        # session, so run a fresh `claude -p` in that case.
+        has_convo = any(
+            r.get("type") in ("user", "assistant") for r in split["context"]
+        )
+        resume_id = None
+        if has_convo:
+            proj = Path.home() / ".claude" / "projects" / _slug(str(repo))
+            proj.mkdir(parents=True, exist_ok=True)
+            resume_id = str(uuid.uuid4())
+            planted = proj / f"{resume_id}.jsonl"
+            planted.write_text(remap(dump_jsonl(split["context"])))
+
+        recreated, proc = run_claude(
+            remap(prompt),
+            model=model,
+            tools=REPLAY_TOOLS,
+            cwd=repo,
+            resume=resume_id,
+            fork=bool(resume_id),
+            permission_mode="acceptEdits",
+        )
+        return {
+            "model": model,
+            "prompt": prompt,
+            "original": original,
+            "recreated": recreated,
+            "source": source,
+            "returncode": proc.returncode,
+            "stderr": (proc.stderr or "")[-2000:],
+            "preTurnExact": undo["preTurnExact"],
+            "undone": undo["undone"],
+            "bashMutations": undo["bashMutations"],
+        }
+    finally:
+        if planted is not None:
+            planted.unlink(missing_ok=True)
+            if proj is not None:
+                try:
+                    proj.rmdir()
+                except OSError:
+                    pass
+        if source:  # release the worktree from the real repo's .git
+            release_worktree(source, repo)
         shutil.rmtree(replay_root, ignore_errors=True)
-    elif recreated:
-        shutil.rmtree(replay_root, ignore_errors=True)
-    return result
 
 
 def recreate(stored: Path, model_override: str | None = None) -> dict[str, str]:
-    recs = [
-        json.loads(line) for line in stored.read_text().splitlines() if line.strip()
-    ]
+    """Replay a tool-free turn in an isolated temp session (tools off by default;
+    ``ALLOW_TOOLS=1`` keeps them on, but then they run against an empty dir)."""
+    recs = load_bundle(stored)
     split = split_transcript(recs)
     prompt, original = split["prompt"], split["original"]
     model = model_override or split["model"]
 
-    # Canonicalize the temp dir (macOS /var → /private/var, /tmp → /private/tmp)
-    # so our slug matches the one Claude Code derives from the real cwd —
-    # otherwise --resume looks in the wrong project dir and never finds the
-    # planted session.
+    # Canonicalize the temp dir (macOS /var → /private/var) so our slug matches
+    # the one Claude Code derives from the real cwd, or --resume can't find it.
     replay_dir = Path(tempfile.mkdtemp()).resolve()
     proj = Path.home() / ".claude" / "projects" / _slug(str(replay_dir))
     proj.mkdir(parents=True, exist_ok=True)
     new_id = str(uuid.uuid4())
     planted = proj / f"{new_id}.jsonl"
-    planted.write_text("".join(json.dumps(r) + "\n" for r in split["context"]))
+    planted.write_text(dump_jsonl(split["context"]))
 
-    cmd = [
-        "claude",
-        "--resume",
-        new_id,
-        "--fork-session",
-        "-p",
-        prompt,
-        "--output-format",
-        "json",
-        "--model",
-        model,
-    ]
-    if os.environ.get("ALLOW_TOOLS", "0") != "1":
-        cmd += ["--allowed-tools", ""]
-
+    tools = None if os.environ.get("ALLOW_TOOLS", "0") == "1" else []
     try:
-        proc = subprocess.run(cmd, cwd=replay_dir, capture_output=True, text=True)
-        recreated = ""
-        if proc.stdout.strip():
-            recreated = json.loads(proc.stdout).get("result", "")
+        recreated, _ = run_claude(
+            prompt, model=model, tools=tools, cwd=replay_dir, resume=new_id, fork=True
+        )
     finally:
         planted.unlink(missing_ok=True)
         try:

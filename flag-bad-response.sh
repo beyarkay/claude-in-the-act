@@ -13,7 +13,9 @@ set -euo pipefail
 DIR="$HOME/projects/claude-in-the-act"
 input=$(cat)
 
-prompt=$(printf '%s' "$input" | jq -r '.prompt // ""')
+# `|| true` so malformed-JSON stdin (jq exits non-zero under `set -e`) degrades
+# to a clean passthrough instead of erroring every prompt submit.
+prompt=$(printf '%s' "$input" | jq -r '.prompt // ""' 2>/dev/null || true)
 [[ "$prompt" == "BAD: "* ]] || exit 0
 
 exec uv run --project "$DIR" python -m claude_in_the_act.capture <<<"$input"

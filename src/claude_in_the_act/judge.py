@@ -13,19 +13,19 @@ adds the regeneration. ``cita-judge <bundle> [regen_model]`` runs one.
 from __future__ import annotations
 
 import json
-import subprocess
 import sys
 from pathlib import Path
 
 from claude_in_the_act import recreate
-from claude_in_the_act.transcript import GOOD_RESPONSE_PLACEHOLDER
+from claude_in_the_act.harness import run_claude
+from claude_in_the_act.transcript import (
+    GOOD_RESPONSE_PLACEHOLDER,
+    annotation,
+    load_bundle,
+)
 
 # Judge with a different model than the one being evaluated (avoids self-bias).
 DEFAULT_JUDGE_MODEL = "claude-sonnet-4-6"
-
-
-def _annotation(recs: list[dict]) -> dict:
-    return next((r for r in reversed(recs) if r.get("type") == "bad_annotation"), {})
 
 
 def build_prompt(
@@ -68,6 +68,15 @@ def _parse_json_obj(text: str) -> dict:
     return json.loads(text[start : end + 1])
 
 
+def _coerce_score(value) -> int | None:
+    """A valid score is a number that rounds into 0-10; anything else (string,
+    bool, out-of-range, missing) is treated as no score (an error)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    rounded = round(value)
+    return rounded if 0 <= rounded <= 10 else None
+
+
 def score_response(
     feedback: str,
     user_prompt: str,
@@ -76,34 +85,19 @@ def score_response(
     recreated: str,
     judge_model: str = DEFAULT_JUDGE_MODEL,
 ) -> dict:
-    """One judge call. Returns {score, rationale}."""
+    """One judge call. Returns {score, rationale}; score is None when the output
+    is unparseable or out of range (so a CLI/auth failure isn't scored as 0)."""
     prompt = build_prompt(feedback, user_prompt, bad, good, recreated)
-    proc = subprocess.run(
-        [
-            "claude",
-            "-p",
-            prompt,
-            "--output-format",
-            "json",
-            "--model",
-            judge_model,
-            "--allowed-tools",
-            "",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    raw = ""
-    if proc.stdout.strip():
-        try:
-            raw = json.loads(proc.stdout).get("result", "")
-        except json.JSONDecodeError:
-            pass
+    raw, proc = run_claude(prompt, model=judge_model, tools=[])
     try:
         obj = _parse_json_obj(raw)
-        return {"score": obj.get("score"), "rationale": obj.get("rationale")}
     except (ValueError, json.JSONDecodeError):
-        return {"score": None, "rationale": f"unparseable judge output: {raw[:200]!r}"}
+        detail = raw[:200] if raw.strip() else (proc.stderr or "")[-200:]
+        return {
+            "score": None,
+            "rationale": f"unparseable judge output (rc {proc.returncode}): {detail!r}",
+        }
+    return {"score": _coerce_score(obj.get("score")), "rationale": obj.get("rationale")}
 
 
 def judge_bundle(
@@ -113,8 +107,7 @@ def judge_bundle(
 ) -> dict:
     """Regenerate the bundle's bad response, then judge the improvement."""
     stored = Path(stored)
-    recs = [json.loads(l) for l in stored.read_text().splitlines() if l.strip()]
-    ann = _annotation(recs)
+    ann = annotation(load_bundle(stored))
     has_git = bool((ann.get("git") or {}).get("sha"))
     regen = (recreate.recreate_with_tools if has_git else recreate.recreate)(
         stored, regen_model

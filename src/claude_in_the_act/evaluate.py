@@ -14,10 +14,8 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from claude_in_the_act import judge
+from claude_in_the_act import DATA_DIR, judge
 from claude_in_the_act.judge import DEFAULT_JUDGE_MODEL
-
-DATA_DIR = Path.home() / "projects" / "claude-in-the-act" / "data"
 
 
 def _judge_one(bundle: str, regen_model: str | None, judge_model: str) -> dict:

@@ -1,8 +1,13 @@
-"""Shared helpers for reading Claude Code transcript records."""
+"""Shared helpers for reading Claude Code transcript records + our bundle jsonl."""
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
+
+# The record type we append to a captured bundle (the feedback/good/bad triple).
+ANNOTATION_TYPE = "bad_annotation"
 
 # Prepopulated value of the bad_annotation `goodResponse` field. Replace it (in
 # the bundle jsonl's last line) with the response you actually wanted; the judge
@@ -12,6 +17,30 @@ GOOD_RESPONSE_PLACEHOLDER = (
 )
 
 _LINENO = re.compile(r"^\s*\d+\t")
+
+
+def load_bundle(path: str | Path) -> list[dict]:
+    """Parse a bundle jsonl into records, skipping blank or malformed lines (one
+    corrupt line shouldn't sink the whole bundle)."""
+    recs = []
+    for line in Path(path).read_text().splitlines():
+        if not line.strip():
+            continue
+        try:
+            recs.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+    return recs
+
+
+def dump_jsonl(recs: list[dict]) -> str:
+    """Serialise records as jsonl (the inverse of ``load_bundle``)."""
+    return "".join(json.dumps(r) + "\n" for r in recs)
+
+
+def annotation(recs: list[dict]) -> dict:
+    """The bundle's bad_annotation record (last one wins), or {} if absent."""
+    return next((r for r in reversed(recs) if r.get("type") == ANNOTATION_TYPE), {})
 
 
 def denumber(rendered: str) -> str:
@@ -53,7 +82,7 @@ def split_transcript(recs: list[dict]) -> dict:
     joined), the context before it, and the model id. Raises ValueError if there
     is no user turn.
     """
-    recs = [r for r in recs if r.get("type") != "bad_annotation"]
+    recs = [r for r in recs if r.get("type") != ANNOTATION_TYPE]
     user_idxs = [i for i, r in enumerate(recs) if user_text(r) is not None]
     if not user_idxs:
         raise ValueError("no string user turn found to replay")

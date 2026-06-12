@@ -27,19 +27,16 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from claude_in_the_act.transcript import GOOD_RESPONSE_PLACEHOLDER, final_response
+from claude_in_the_act import DATA_DIR
+from claude_in_the_act.harness import git_out
+from claude_in_the_act.transcript import (
+    ANNOTATION_TYPE,
+    GOOD_RESPONSE_PLACEHOLDER,
+    final_response,
+    load_bundle,
+)
 
 PREFIX = "BAD: "
-DEFAULT_DATA_DIR = Path.home() / "projects" / "claude-in-the-act" / "data"
-
-
-def _git(cwd: str, *args: str) -> str | None:
-    """Run a git command in ``cwd``; return stripped stdout, or None on failure."""
-    try:
-        proc = subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True)
-    except OSError:
-        return None
-    return proc.stdout.strip() if proc.returncode == 0 else None
 
 
 def capture_git(cwd: str, patch_path: Path) -> dict[str, str | None]:
@@ -57,13 +54,13 @@ def capture_git(cwd: str, patch_path: Path) -> dict[str, str | None]:
     }
     if not cwd or not os.path.isdir(cwd):
         return info
-    if _git(cwd, "rev-parse", "--git-dir") is None:
+    if git_out("-C", cwd, "rev-parse", "--git-dir") is None:
         return info
 
-    info["sha"] = _git(cwd, "rev-parse", "HEAD")
-    info["branch"] = _git(cwd, "rev-parse", "--abbrev-ref", "HEAD")
-    info["remote"] = _git(cwd, "remote", "get-url", "origin") or _git(
-        cwd, "config", "--get", "remote.origin.url"
+    info["sha"] = git_out("-C", cwd, "rev-parse", "HEAD")
+    info["branch"] = git_out("-C", cwd, "rev-parse", "--abbrev-ref", "HEAD")
+    info["remote"] = git_out("-C", cwd, "remote", "get-url", "origin") or git_out(
+        "-C", cwd, "config", "--get", "remote.origin.url"
     )
     if not info["sha"]:
         return info  # no commits yet → nothing to diff against
@@ -121,19 +118,17 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
     base = data_dir / f"{ts}-{session}"
     out = base.with_suffix(".jsonl")
     shutil.copyfile(transcript, out)  # verbatim snapshot
+    _ensure_trailing_newline(out)  # or the annotation fuses onto the last record
 
     git_info = capture_git(cwd, base.with_suffix(".patch"))
 
     # The flagged response is a machine-readable triple in the annotation: the
-    # bad response (extracted), the user's feedback, and a goodResponse slot to
-    # be filled in later (the eval's gold target — left null at capture time).
-    transcript_recs = [
-        json.loads(line) for line in out.read_text().splitlines() if line.strip()
-    ]
+    # bad response (extracted), the user's feedback, and a goodResponse slot the
+    # user fills in later (the eval's gold target — a placeholder at capture).
     annotation = {
-        "type": "bad_annotation",
+        "type": ANNOTATION_TYPE,
         "feedback": critique,
-        "badResponse": final_response(transcript_recs),
+        "badResponse": final_response(load_bundle(out)),
         "goodResponse": GOOD_RESPONSE_PLACEHOLDER,
         "sessionId": session,
         "cwd": cwd,
@@ -148,19 +143,31 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
     feedback = " ".join(critique.split())
     if len(feedback) > 70:
         feedback = feedback[:67] + "..."
-    project = DEFAULT_DATA_DIR.parent
     return 2, (
         f'✎ BAD response captured — feedback: "{feedback}"\n'
         f"  bundle:  {out.resolve()} ({records} records{patch_note})\n"
         f"  (fill the goodResponse field in that jsonl with your ideal answer)\n"
-        f"  judge:   uv run --project {project} cita-judge {out.resolve()} [model]"
+        f"  judge:   uv run --project {data_dir.parent} cita-judge {out.resolve()} [model]"
     )
+
+
+def _ensure_trailing_newline(path: Path) -> None:
+    """Append a newline if the file is non-empty and doesn't end with one, so a
+    later append starts on its own line."""
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        if f.tell() == 0:
+            return
+        f.seek(-1, os.SEEK_END)
+        if f.read(1) == b"\n":
+            return
+    with path.open("a") as f:
+        f.write("\n")
 
 
 def main() -> int:
     payload = json.load(sys.stdin)
-    data_dir = Path(os.environ.get("CITA_DATA_DIR", str(DEFAULT_DATA_DIR)))
-    code, msg = process(payload, data_dir)
+    code, msg = process(payload, DATA_DIR)
     if msg:
         print(msg, file=sys.stderr)
     return code
