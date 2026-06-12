@@ -29,8 +29,9 @@ def test_format_report_overall_and_lines():
     rep = evaluate.format_report(
         results, "claude-fable-5", "claude-sonnet-4-6", "2026-06-12"
     )
-    assert "8/30" in rep  # total 8, max 10*3
-    assert "avg 4.0/10 over 2 scored" in rep
+    assert "avg 4.0/10" in rep  # (8 + 0) / 2 scored
+    assert "min 0" in rep and "max 8" in rep
+    assert "2 scored, 1 error(s), 3 total" in rep
     assert "claude-fable-5" in rep
     assert "too long" in rep and "terser now" in rep
     assert "ERROR: boom" in rep

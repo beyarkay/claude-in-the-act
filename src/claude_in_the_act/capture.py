@@ -27,7 +27,7 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
-from claude_in_the_act.transcript import final_response
+from claude_in_the_act.transcript import GOOD_RESPONSE_PLACEHOLDER, final_response
 
 PREFIX = "BAD: "
 DEFAULT_DATA_DIR = Path.home() / "projects" / "claude-in-the-act" / "data"
@@ -134,7 +134,7 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
         "type": "bad_annotation",
         "feedback": critique,
         "badResponse": final_response(transcript_recs),
-        "goodResponse": None,
+        "goodResponse": GOOD_RESPONSE_PLACEHOLDER,
         "sessionId": session,
         "cwd": cwd,
         "capturedAt": ts,

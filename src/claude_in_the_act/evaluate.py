@@ -60,15 +60,16 @@ def run_eval(
 def format_report(
     results: list[dict], regen_model: str | None, judge_model: str, when: str
 ) -> str:
-    scored = [r for r in results if isinstance(r.get("score"), int)]
-    total = sum(r["score"] for r in scored)
-    maximum = 10 * len(results)
-    avg = total / len(scored) if scored else 0.0
+    vals = [r["score"] for r in results if isinstance(r.get("score"), int)]
+    errors = len(results) - len(vals)
+    avg = sum(vals) / len(vals) if vals else 0.0
+    lo, hi = (min(vals), max(vals)) if vals else (0, 0)
     out = [
         f"# claude-in-the-act eval — model: {regen_model or '(harness default)'}",
-        f"_judge: {judge_model} · {when} · {len(results)} transcripts_",
+        f"_judge: {judge_model} · {when}_",
         "",
-        f"## Overall: {total}/{maximum}   (avg {avg:.1f}/10 over {len(scored)} scored)",
+        f"## Overall: avg {avg:.1f}/10 · min {lo} · max {hi} · "
+        f"{len(vals)} scored, {errors} error(s), {len(results)} total",
         "",
         "## Per-transcript (worst first)",
         "",

@@ -4,6 +4,13 @@ from __future__ import annotations
 
 import re
 
+# Prepopulated value of the bad_annotation `goodResponse` field. Replace it (in
+# the bundle jsonl's last line) with the response you actually wanted; the judge
+# treats it as "no ideal response" until you do.
+GOOD_RESPONSE_PLACEHOLDER = (
+    "<<< REPLACE THIS with the response you wanted — then the judge will use it >>>"
+)
+
 _LINENO = re.compile(r"^\s*\d+\t")
 
 

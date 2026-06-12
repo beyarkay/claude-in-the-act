@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from claude_in_the_act import recreate
+from claude_in_the_act.transcript import GOOD_RESPONSE_PLACEHOLDER
 
 # Judge with a different model than the one being evaluated (avoids self-bias).
 DEFAULT_JUDGE_MODEL = "claude-sonnet-4-6"
@@ -118,11 +119,21 @@ def judge_bundle(
     regen = (recreate.recreate_with_tools if has_git else recreate.recreate)(
         stored, regen_model
     )
+    if not (regen.get("recreated") or "").strip():
+        # An empty regeneration is a replay failure, not a model-quality signal —
+        # don't judge it (would unfairly score 0). Surface it as an error.
+        raise RuntimeError(
+            f"regeneration produced no output (returncode "
+            f"{regen.get('returncode')}); not judged"
+        )
+    good = ann.get("goodResponse")
+    if good == GOOD_RESPONSE_PLACEHOLDER:
+        good = None  # placeholder not yet filled in → judge on feedback alone
     verdict = score_response(
         ann.get("feedback", ""),
         regen.get("prompt", ""),
         regen.get("original", ""),
-        ann.get("goodResponse"),
+        good,
         regen.get("recreated", ""),
         judge_model,
     )
@@ -135,7 +146,7 @@ def judge_bundle(
         "prompt": regen.get("prompt"),
         "original": regen.get("original"),
         "recreated": regen.get("recreated"),
-        "hadGoodResponse": bool(ann.get("goodResponse")),
+        "hadGoodResponse": good is not None,
     }
 
 
@@ -144,7 +155,11 @@ def main() -> int:
         print("usage: cita-judge <bundle.jsonl> [regen_model]", file=sys.stderr)
         return 1
     regen_model = sys.argv[2] if len(sys.argv) > 2 else None
-    print(json.dumps(judge_bundle(sys.argv[1], regen_model), indent=2))
+    try:
+        print(json.dumps(judge_bundle(sys.argv[1], regen_model), indent=2))
+    except RuntimeError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
     return 0
 
 

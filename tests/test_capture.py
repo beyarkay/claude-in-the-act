@@ -92,7 +92,7 @@ def test_capture_writes_bundle_with_git_and_patch(tmp_path):
     ann = json.loads(lines[-1])
     assert ann["type"] == "bad_annotation"
     assert ann["feedback"] == "parrots the codeword"
-    assert ann["goodResponse"] is None  # machine-readable slot, filled in later
+    assert ann["goodResponse"].startswith("<<<")  # placeholder to fill in later
     assert "badResponse" in ann
     assert ann["sessionId"] == "sess1"
     assert ann["git"]["sha"]
