@@ -1,116 +1,112 @@
 # claude-in-the-act
 
-A capture harness + growing dataset of **bad Claude Code responses**, each
-paired with a human critique. The long-term goal: replay these as an eval when a
-new model ships — prefill the full context, let the new model produce the next
-turn, and compare its judgement against the old (bad) one.
+Catch Claude giving a bad answer, flag it in one keystroke, and turn that single
+moment into a reusable, personal eval — so when a new model ships you can ask the
+only question that matters: **does it fix the things _I_ specifically dislike?**
 
-## How it works
+### The name
 
-`flag-bad-response.sh` is a Claude Code **`UserPromptSubmit`** hook — a thin
-bash gate that fires on every submit, checks the prefix with `jq` (no Python
-boot on the common path), and only on a match hands the payload to the Python
-capturer (`cita-capture`). In any session, when you start a prompt with the
-magic prefix:
+"Caught in the act" — found out mid-wrongdoing, red-handed. This tool swaps
+_caught_ for _Claude_: you catch **Claude in the act** of a bad response, right
+there in the live session, the instant it happens. The "act" is also the
+performance — a model's turn is its act on stage. You grab the one bad take and
+keep it, so later you can re-run the same scene with a different actor and see
+who plays it better.
 
-```
-BAD: <why this response was bad; what a proper response would look like>
-```
+## Why you'd want this
 
-the capturer:
+Benchmarks measure what the benchmark authors care about. This measures what
+**you** care about — the specific ways your Claude Code sessions go wrong:
+over-eager edits, hedging, ignoring your CLAUDE.md, wrong altitude, missing the
+point of the prompt. Every time one of those annoys you, you spend one keystroke
+to bank it. Over time you accumulate a private regression suite built entirely
+from your own pet peeves.
 
-1. Copies the live session transcript (`transcript_path` from the hook payload)
-   **verbatim** into `data/<timestamp>-<session-id>.jsonl`. At submit time the
-   last `assistant` record in that file is the bad response, so the snapshot is
-   the full context up to and including it.
-2. Captures **git state** (best-effort) so a file/code-dependent context can be
-   reconstructed later without assuming the working tree still exists:
-   - `git.sha`, `git.branch`, `git.remote` recorded in the annotation;
-   - a full working-tree patch vs `HEAD` — **including untracked files**,
-     excluding `.gitignore`d ones — written to `data/<...>.patch`. The patch is
-     built in a *throwaway index* (`GIT_INDEX_FILE`) so your real staging area
-     is never touched. `git apply` restores it.
-3. Appends one final record — your critique + the git state — so the jsonl stays
-   the self-contained index (the `.patch`, if any, sits beside it):
-   ```json
-   {"type":"bad_annotation","critique":"...","sessionId":"...","cwd":"...","capturedAt":"...",
-    "git":{"sha":"...","branch":"...","remote":null,"patchFile":"<...>.patch"}}
-   ```
-4. **Blocks** the prompt (`exit 2`) so the `BAD: ...` line never reaches the
-   model — it costs no turn and no tokens. You get a one-line confirmation
-   showing where it saved.
+Then a new model drops. Instead of vibes, you run your whole collection through
+it and get a scored report: _here's how much `claude-fable-5` fixes the things
+that used to bug you._ The replay rebuilds the harness (system prompt + tool
+schemas) fresh every time, so you're always testing the **current** Claude Code
+against your **old** complaints — and you pick up harness improvements for free.
 
-Any prompt that doesn't start with `BAD: ` passes straight through.
+## The workflow
 
-## What the jsonl contains (and doesn't)
+### 1. Flag a bad response — mid-session, one line
 
-Captured — enough to replay the **conversation**:
-
-- Every user prompt; every assistant turn (`thinking` + `text` + `tool_use`
-  with full input args); every `tool_result` (what the model actually saw back).
-- Per-message `model` id, timestamps, git branch, cwd.
-- Partial injected context as `attachment` records (skill listing, MCP
-  instructions, deferred-tool name deltas).
-
-**Not** captured — so you cannot reconstruct the byte-exact API request:
-
-- The system prompt (Claude Code preamble + environment + your CLAUDE.md) — sent
-  to the API each turn but never written to the transcript.
-- Full tool JSON schemas (only names appear).
-
-We store **verbatim** rather than stripping the ~4% throwaway records
-(`mode`, `permission-mode`, `ai-title`, `last-prompt`, `queue-operation`): the
-eval format isn't locked, lossy-at-capture is irreversible, and filtering is
-free at read-time.
-
-## Judging a captured response
+When Claude gives you a response you don't like, start your **next** prompt with
+the magic prefix and say what was wrong:
 
 ```
-uv run cita-judge data/<...>.jsonl [model]
+BAD: deleted my test instead of fixing it — should have asked before destructive edits
 ```
 
-`cita-judge` is the single entry point: it **regenerates** the flagged response
-and then **judges** it — there's deliberately no recreate-without-judge command.
-It prints `{bundle, feedback, score, rationale, regenModel, prompt, original,
-recreated, hadGoodResponse}`. Pass a model id (2nd arg) to evaluate a specific
-model under the *current* harness — e.g. `claude-fable-5` to see whether a newer
-model fixes what you disliked. The judge itself runs on a different model
-(`claude-sonnet-4-6`) to avoid self-bias.
+That's it. A `UserPromptSubmit` hook intercepts the line, snapshots the whole
+session up to and including the bad turn, records the git state, and **blocks the
+prompt** so the `BAD:` line never reaches the model — it costs you no turn and no
+tokens. You get a one-line confirmation telling you where it saved.
 
-**Regeneration** (the first half of `cita-judge`) restores the pre-turn
-situation and re-runs the model, via one of two paths:
+Anything that doesn't start with `BAD: ` passes straight through, untouched.
 
-- **Tool-free turns** (`recreate`): drop the final assistant + user turns,
-  restore the rest via `claude --resume --fork-session` in an isolated temp dir,
-  re-issue the final user message, tools off. Pure-text regeneration, fully
-  self-contained. Good for reasoning/judgement/verbosity critiques.
-- **Tool-using turns** (`recreate_with_tools`): **reconstruct the real repo** and
-  run real tools against it — a detached `git worktree` off the local repo
-  (fallback: clone the remote / local path), checkout the captured `git.sha`,
-  `git apply` the `.patch`, then **undo the bad turn's own Write/Edit** so the
-  model faces the genuine pre-turn state. Runs `claude --resume` there (with the
-  resumed context's paths rewritten to the worktree, so it never touches the
-  real repo). The harness sees a **real git repo**, so environment-aware
-  reasoning (git status, `.gitignore`, dir layout) is correct.
+### 2. (Optional) Write the answer you wanted
 
-The harness **rebuilds the system prompt + tool schemas fresh at launch**, so a
-replay tracks the *current* harness/model and the eval picks up harness
-improvements for free.
+The capture leaves a `goodResponse` slot in the saved bundle. If you have the
+patience, open the `.jsonl` and replace the placeholder on the last line with the
+response you _actually_ wanted. The judge will hold regenerations to that gold
+standard. Skip it and the judge scores against your written feedback alone —
+still useful, just less precise.
 
-**Reconstruction requires git to be reachable** — the local repo (worktree) or a
-remote with the SHA. It is *not* self-contained (we traded self-containment for
-environment fidelity), and it's *working-tree* isolation, not hard isolation (a
-`git push` from the worktree could still reach the real remote). Bash commands
-in the bad turn that mutate files can't be reversed from the transcript, so the
-result flags `preTurnExact: false` when that happens.
+### 3. Regenerate + judge a single capture
 
-## Install
+```
+uv run cita-judge data/<timestamp>-<session>.jsonl [model]
+```
 
-Requires [`uv`](https://docs.astral.sh/uv/) on `PATH` (the hook invokes
-`uv run`) and `jq`.
+This is the single entry point. It **regenerates** the flagged turn under the
+current harness and then **judges** the result 0–10: how much better is the new
+response at addressing _your_ feedback (and matching your ideal answer, if you
+wrote one)? The judge runs on a different model (`claude-sonnet-4-6`) to avoid a
+model grading itself.
 
-The hook script lives here; activation is one entry in `~/.claude/settings.json`
-under `hooks.UserPromptSubmit`:
+Pass a model id as the second argument to test a specific one —
+`claude-fable-5`, say, to check whether a newer model fixes what you flagged.
+
+### 4. Score your whole collection
+
+```
+uv run cita-eval [model]
+```
+
+Runs the judge over **every** captured bundle in parallel and writes a markdown
+report to `data/eval-<timestamp>-<model>.md`: an overall average plus a
+per-transcript breakdown, worst first, each with the judge's rationale. This is
+the payoff — one command, one number, "how much does this model fix what I
+dislike."
+
+## How the replay stays honest
+
+A regeneration is only meaningful if the model faces the _real_ situation again.
+Two paths, picked automatically:
+
+- **Tool-free turns** — reasoning, judgement, verbosity critiques. The context
+  is restored in an isolated temp session and the final prompt re-issued with
+  tools off. Fully self-contained.
+- **Tool-using turns** — the model touched files. The harness **reconstructs the
+  actual repo**: a detached `git worktree` off your local repo, checked out to
+  the captured SHA, the working-tree patch re-applied, and the bad turn's own
+  edits undone — so the model meets the genuine pre-turn state and real tools
+  (git status, `.gitignore`, directory layout) all behave correctly. Paths in
+  the resumed context are rewritten to the worktree, so your real repo is never
+  touched.
+
+Reconstruction needs git to be reachable (your local repo or a remote with the
+SHA). It's working-tree isolation, not a hard sandbox.
+
+## Getting started
+
+You need [`uv`](https://docs.astral.sh/uv/) and `jq` on your `PATH`. Runtime is
+stdlib-only — no install step beyond cloning.
+
+Activate the capture hook with one entry in `~/.claude/settings.json` under
+`hooks.UserPromptSubmit`:
 
 ```json
 {
@@ -121,31 +117,13 @@ under `hooks.UserPromptSubmit`:
 }
 ```
 
-(Already wired up if this repo was set up by Claude.)
+(If Claude set this repo up for you, it's already wired in.)
 
-## Layout
+Now go use Claude Code as normal. The next time it disappoints you, type
+`BAD: ...` and you've started your eval set.
 
-```
-flag-bad-response.sh         thin UserPromptSubmit gate (bash + jq)
-src/claude_in_the_act/
-  capture.py                 cita-capture: snapshot transcript + git state
-  transcript.py              shared record helpers (split, denumber)
-  recreate.py                regeneration: reconstruct pre-turn repo + replay
-  judge.py                   cita-judge: regenerate + LLM-judge vs feedback
-tests/                       pytest suite (unit + marked e2e)
-data/                        captured <ts>-<session>.jsonl (+ .patch) snapshots (git-ignored)
-pyproject.toml               uv project; console scripts; pytest config
-```
+## A note on `data/`
 
-## Tests
-
-```
-uv run pytest            # fast offline unit tests
-uv run pytest -m e2e     # full capture→delete→replay round-trip via real `claude` (costs $$)
-```
-
-## Note on `data/`
-
-Snapshots are full transcripts and can contain file contents, paths, and
-secrets, so `data/*.jsonl` and `data/*.patch` are git-ignored by default. Remove
-the ignore rules if you want to version/share the collection.
+Captures are full session transcripts — they can contain file contents, paths,
+and secrets. `data/*.jsonl` and `data/*.patch` are git-ignored by default.
+Delete those ignore rules only if you intend to version or share the collection.
