@@ -1,0 +1,12 @@
+# Captured transcripts may contain file contents, paths, and secrets.
+# Stored locally; not versioned by default. Remove these lines to share them.
+data/*.jsonl
+data/*.patch
+!data/.gitkeep
+
+# Python / uv
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

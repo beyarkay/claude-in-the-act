@@ -1,0 +1,27 @@
+[project]
+name = "claude-in-the-act"
+version = "0.1.0"
+description = "Capture + replay bad Claude Code responses, for model-vs-model evals"
+requires-python = ">=3.11"
+dependencies = []  # stdlib only at runtime
+
+[project.scripts]
+cita-capture = "claude_in_the_act.capture:main"
+cita-recreate = "claude_in_the_act.recreate:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/claude_in_the_act"]
+
+[dependency-groups]
+dev = ["ty", "pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-m 'not e2e'"
+markers = [
+    "e2e: end-to-end tests that spawn the real `claude` CLI (cost money + network; opt in with `-m e2e`)",
+]
