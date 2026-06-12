@@ -392,7 +392,18 @@ def main() -> int:
     if not stored.is_file():
         print(f"no such file: {stored}", file=sys.stderr)
         return 1
-    print(json.dumps(recreate(stored, model_override), indent=2))
+    # Reconstruction (real repo + real tools) when the capture has git state;
+    # otherwise the tool-free regeneration.
+    recs = [
+        json.loads(line) for line in stored.read_text().splitlines() if line.strip()
+    ]
+    has_git = any(
+        (r.get("git") or {}).get("sha")
+        for r in recs
+        if r.get("type") == "bad_annotation"
+    )
+    fn = recreate_with_tools if has_git else recreate
+    print(json.dumps(fn(stored, model_override), indent=2))
     return 0
 
 

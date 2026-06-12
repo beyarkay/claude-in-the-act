@@ -79,7 +79,8 @@ def test_capture_writes_bundle_with_git_and_patch(tmp_path):
     )
 
     assert code == 2
-    assert "saved" in msg
+    assert "captured" in msg and "cita-recreate" in msg
+    assert "parrots the codeword" in msg  # the feedback snippet
 
     jsonls = list(data.glob("*.jsonl"))
     patches = list(data.glob("*.patch"))

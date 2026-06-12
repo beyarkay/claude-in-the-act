@@ -134,8 +134,16 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
         f.write(json.dumps(annotation) + "\n")
 
     records = sum(1 for _ in out.open())
-    extra = f" + {git_info['patchFile']}" if git_info["patchFile"] else ""
-    return 2, f"BAD: saved {out.name} ({records} records){extra} → {data_dir}"
+    patch_note = " +patch" if git_info["patchFile"] else ""
+    feedback = " ".join(critique.split())
+    if len(feedback) > 70:
+        feedback = feedback[:67] + "..."
+    project = DEFAULT_DATA_DIR.parent
+    return 2, (
+        f'✎ BAD response captured — feedback: "{feedback}"\n'
+        f"  bundle:  {out.resolve()} ({records} records{patch_note})\n"
+        f"  re-run:  uv run --project {project} cita-recreate {out.resolve()}"
+    )
 
 
 def main() -> int:
