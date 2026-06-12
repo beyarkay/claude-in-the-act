@@ -74,24 +74,29 @@ headless session and prints `{original, recreated, prompt, model}` so you can
 diff the stored (bad) response against a fresh one — e.g. pass a newer model id
 to see whether it does better.
 
-How it stays faithful and side-effect-free:
+Two paths:
 
-- It drops the final assistant turn (the bad one) and the final user turn,
-  restores the rest via `claude --resume --fork-session`, and re-issues the
-  final user message as the prompt.
-- The harness **rebuilds the system prompt + tool schemas fresh at launch**, so
-  the replay tracks the *current* harness/model — the bits the transcript
-  doesn't store are restored automatically, and the eval picks up harness
-  improvements for free.
-- It runs from an **isolated temp dir** (canonicalized for the macOS
-  `/var`→`/private/var` symlink, or `--resume` can't find the planted session),
-  so it never depends on the original working tree still existing.
-- **Tools are off by default** (`--allowed-tools ""`): pure-text regeneration,
-  no side effects. This is correct for reasoning/judgement critiques. For a turn
-  whose quality came from *doing* tool work, set `ALLOW_TOOLS=1` — but then the
-  model's calls actually execute against the *current* filesystem, so only do
-  that after restoring the captured `.patch` into a reconstructed tree. (A
-  faithful record-replay tool shim is a TODO.)
+- **Tool-free turns** (`recreate`): drop the final assistant + user turns,
+  restore the rest via `claude --resume --fork-session` in an isolated temp dir,
+  re-issue the final user message, tools off. Pure-text regeneration, fully
+  self-contained. Good for reasoning/judgement/verbosity critiques.
+- **Tool-using turns** (`recreate_with_tools`): **reconstruct the real repo** and
+  run real tools against it. It `git clone`s the captured remote (default; the
+  original local path as fallback), checks out the captured `git.sha`, and
+  `git apply`s the `.patch` (tracked + untracked) into a `/tmp` dir, then runs
+  `claude --resume` there. The harness sees a **real git repo**, so environment-
+  aware reasoning (git status, `.gitignore`, dir layout) is correct and every
+  tool runs for real — no mocking.
+
+The harness **rebuilds the system prompt + tool schemas fresh at launch**, so a
+replay tracks the *current* harness/model and the eval picks up harness
+improvements for free.
+
+**Reconstruction requires git to be reachable at replay time** — a live remote
+with the SHA pushed, or the original local repo. It is *not* self-contained (we
+traded self-containment for environment fidelity). Known nuance: the `.patch` is
+captured *after* the bad turn, so a turn's own file writes are present in the
+reconstruction (the replayed model may note "already exists").
 
 ## Install
 
