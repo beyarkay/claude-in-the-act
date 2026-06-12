@@ -190,34 +190,54 @@ def undo_last_turn(recs: list[dict], repo: Path) -> dict:
 def reconstruct(annotation: dict, patch_path: Path | None, dest: Path) -> str:
     """Rebuild the working tree at capture time into ``dest``.
 
-    Clone the remote (default) or the original local path (fallback), check out
-    the captured SHA, and apply the patch (tracked + untracked). Returns the
-    source cloned from. Raises if the SHA can't be reconstructed.
+    Fast path: a detached ``git worktree`` off the original local repo (has all
+    commits incl. unpushed, real config, no network). Fallback: clone the remote
+    (default) or the local path. Then ``git apply`` the patch (tracked +
+    untracked). Returns a source tag (``worktree:<repo>`` or the clone URL);
+    raises if the SHA is unreachable. Worktree sources must be released by the
+    caller with ``release_worktree``.
     """
     git = annotation.get("git") or {}
     sha = git.get("sha")
     if not sha:
         raise RuntimeError("capture has no git SHA — cannot reconstruct")
-    sources = [s for s in (git.get("remote"), annotation.get("cwd")) if s]
+    cwd = annotation.get("cwd")
+    source = None
 
-    for src in sources:
-        shutil.rmtree(dest, ignore_errors=True)
-        if _git("clone", "--quiet", src, str(dest)).returncode != 0:
-            continue
-        if (
-            _git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
-            == 0
-        ):
-            break
-        # SHA absent from the default clone — try fetching it explicitly.
-        _git("-C", str(dest), "fetch", "--quiet", src, sha)
-        if (
-            _git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
-            == 0
-        ):
-            break
-    else:
-        raise RuntimeError(f"could not reconstruct {sha} from {sources}")
+    # Fast path: a worktree off the local repo, if it still has the SHA.
+    if (
+        cwd
+        and Path(cwd).is_dir()
+        and _git("-C", cwd, "rev-parse", "--git-dir").returncode == 0
+        and _git("-C", cwd, "cat-file", "-e", sha).returncode == 0
+        and _git("-C", cwd, "worktree", "add", "--detach", str(dest), sha).returncode
+        == 0
+    ):
+        source = f"worktree:{cwd}"
+
+    # Fallback: clone the remote (default) or the local path.
+    if source is None:
+        for src in [s for s in (git.get("remote"), cwd) if s]:
+            shutil.rmtree(dest, ignore_errors=True)
+            if _git("clone", "--quiet", src, str(dest)).returncode != 0:
+                continue
+            if (
+                _git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
+                == 0
+            ):
+                source = src
+                break
+            _git(
+                "-C", str(dest), "fetch", "--quiet", src, sha
+            )  # SHA not in default clone
+            if (
+                _git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
+                == 0
+            ):
+                source = src
+                break
+    if source is None:
+        raise RuntimeError(f"could not reconstruct {sha} (worktree + clone failed)")
 
     if patch_path and patch_path.exists():
         applied = _git("-C", str(dest), "apply", "--whitespace=nowarn", str(patch_path))
@@ -230,7 +250,15 @@ def reconstruct(annotation: dict, patch_path: Path | None, dest: Path) -> str:
                 "--whitespace=nowarn",
                 str(patch_path),
             )
-    return src
+    return source
+
+
+def release_worktree(source: str, dest: Path) -> None:
+    """Remove a worktree created by ``reconstruct`` (no-op for clone sources)."""
+    if source.startswith("worktree:"):
+        orig = source[len("worktree:") :]
+        _git("-C", orig, "worktree", "remove", "--force", str(dest))
+        _git("-C", orig, "worktree", "prune")
 
 
 def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict:
@@ -265,12 +293,20 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
     # Write/Edit. Reverse them so the model faces the PRE-turn situation.
     undo = undo_last_turn(recs, repo)
 
+    # Path-rewrite: the resumed context references the ORIGINAL absolute cwd, but
+    # the reconstruction lives elsewhere. Repoint those paths at the worktree so
+    # the model operates there, not (via leaked absolute paths) on the real repo.
+    orig_cwd = annotation.get("cwd")
+
+    def _remap(text: str) -> str:
+        return text.replace(orig_cwd, str(repo)) if orig_cwd else text
+
     # Single-turn captures have no prior messages; `--resume` rejects an empty
     # session, so run a fresh `claude -p` in that case.
     has_convo = any(r.get("type") in ("user", "assistant") for r in split["context"])
     base = [
         "-p",
-        prompt,
+        _remap(prompt),
         "--output-format",
         "json",
         "--model",
@@ -291,7 +327,8 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
         proj.mkdir(parents=True, exist_ok=True)
         new_id = str(uuid.uuid4())
         planted = proj / f"{new_id}.jsonl"
-        planted.write_text("".join(json.dumps(r) + "\n" for r in split["context"]))
+        ctx = "".join(json.dumps(r) + "\n" for r in split["context"])
+        planted.write_text(_remap(ctx))
         cmd = ["claude", "--resume", new_id, "--fork-session", *base]
     else:
         cmd = ["claude", *base]
@@ -323,7 +360,12 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
         "undone": undo["undone"],
         "bashMutations": undo["bashMutations"],
     }
-    if recreated:
+    # Always release a worktree (it lives in the real repo's .git); keep the
+    # /tmp dir on failure only for clone sources (for debugging).
+    if source.startswith("worktree:"):
+        release_worktree(source, repo)
+        shutil.rmtree(replay_root, ignore_errors=True)
+    elif recreated:
         shutil.rmtree(replay_root, ignore_errors=True)
     return result
 

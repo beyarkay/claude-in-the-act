@@ -87,3 +87,35 @@ def test_undo_no_user_turn_is_exact_noop():
         [{"type": "assistant", "message": {"content": []}}], None
     )
     assert out == {"preTurnExact": True, "undone": [], "bashMutations": []}
+
+
+def test_reconstruct_uses_worktree_off_local_repo(tmp_path):
+    """reconstruct() prefers a fast detached worktree off the local repo, and
+    release_worktree() cleans it up."""
+    import subprocess
+
+    def git(*a, cwd):
+        subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)
+
+    repo = tmp_path / "orig"
+    repo.mkdir()
+    git("init", "-q", cwd=repo)
+    git("config", "user.email", "t@t", cwd=repo)
+    git("config", "user.name", "t", cwd=repo)
+    (repo / "a.txt").write_text("hello\n")
+    git("add", ".", cwd=repo)
+    git("commit", "-qm", "x", cwd=repo)
+    sha = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True
+    ).stdout.strip()
+
+    dest = tmp_path / "wt"
+    src = recreate.reconstruct({"cwd": str(repo), "git": {"sha": sha}}, None, dest)
+    assert src == f"worktree:{repo}"
+    assert (dest / "a.txt").read_text() == "hello\n"
+
+    recreate.release_worktree(src, dest)
+    wl = subprocess.run(
+        ["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True
+    ).stdout
+    assert str(dest) not in wl  # worktree released
