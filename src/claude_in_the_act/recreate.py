@@ -30,7 +30,6 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from claude_in_the_act.replay import build_recording
 from claude_in_the_act.transcript import split_transcript
 
 
@@ -39,83 +38,105 @@ def _slug(path: str) -> str:
     return re.sub(r"[^A-Za-z0-9]", "-", path)
 
 
-def _cita_root() -> Path:
-    return Path(__file__).resolve().parents[2]
+def _git(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", *args], capture_output=True, text=True)
+
+
+def reconstruct(annotation: dict, patch_path: Path | None, dest: Path) -> str:
+    """Rebuild the working tree at capture time into ``dest``.
+
+    Clone the remote (default) or the original local path (fallback), check out
+    the captured SHA, and apply the patch (tracked + untracked). Returns the
+    source cloned from. Raises if the SHA can't be reconstructed.
+    """
+    git = annotation.get("git") or {}
+    sha = git.get("sha")
+    if not sha:
+        raise RuntimeError("capture has no git SHA — cannot reconstruct")
+    sources = [s for s in (git.get("remote"), annotation.get("cwd")) if s]
+
+    for src in sources:
+        shutil.rmtree(dest, ignore_errors=True)
+        if _git("clone", "--quiet", src, str(dest)).returncode != 0:
+            continue
+        if (
+            _git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
+            == 0
+        ):
+            break
+        # SHA absent from the default clone — try fetching it explicitly.
+        _git("-C", str(dest), "fetch", "--quiet", src, sha)
+        if (
+            _git("-C", str(dest), "checkout", "--quiet", "--detach", sha).returncode
+            == 0
+        ):
+            break
+    else:
+        raise RuntimeError(f"could not reconstruct {sha} from {sources}")
+
+    if patch_path and patch_path.exists():
+        applied = _git("-C", str(dest), "apply", "--whitespace=nowarn", str(patch_path))
+        if applied.returncode != 0:
+            _git(
+                "-C",
+                str(dest),
+                "apply",
+                "--3way",
+                "--whitespace=nowarn",
+                str(patch_path),
+            )
+    return src
 
 
 def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict:
-    """Replay a tool-using turn with tools ON but every tool call served from the
-    RECORDING (no codebase, no execution).
+    """Replay a tool-using turn against a FULL reconstruction of the original
+    repo, with real tools (no mocking).
 
-    Sets up a temp replay dir with `.claude/settings.json` PreToolUse hooks that
-    intercept Read/Bash/Write/Edit and feed back the recorded results (see
-    `claude_in_the_act.replay`). The model re-runs against the recording; calls
-    that don't match a recorded one are denied and logged as divergences.
+    Rebuilds the captured tree (git clone + checkout SHA + git apply patch) into
+    a /tmp dir, then runs ``claude --resume`` there — so the harness sees a real
+    git repo and every tool runs for real against it. Requires git state in the
+    capture (SHA + a reachable remote or local path).
     """
     recs = [
         json.loads(line) for line in stored.read_text().splitlines() if line.strip()
     ]
     split = split_transcript(recs)
-    recording = build_recording(recs)
     prompt, original = split["prompt"], split["original"]
     model = model_override or split["model"]
-
-    replay_dir = Path(tempfile.mkdtemp()).resolve()
-    stash = replay_dir / "_stash"
-    stash.mkdir()
-    (replay_dir / "recording.json").write_text(json.dumps(recording))
-
-    # Seed recorded files into the sandbox at cwd-relative paths. Edit (unlike
-    # Read) pre-checks that the file EXISTS before the hook runs, so the file
-    # must be present for the hook to then redirect it. Content still comes from
-    # the recording (no real codebase needed).
-    orig_cwd = next((r.get("cwd") for r in reversed(recs) if r.get("cwd")), None)
-    if orig_cwd:
-        from claude_in_the_act.replay import denumber
-
-        for entry in recording:
-            if entry["tool_name"] != "Read":
-                continue
-            try:
-                rel = Path(entry["input"]["file_path"]).relative_to(orig_cwd)
-            except (ValueError, KeyError):
-                continue
-            dest = replay_dir / rel
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                dest.write_text(denumber(entry["content"]))
-            except OSError:
-                pass
-
-    venv_py = _cita_root() / ".venv" / "bin" / "python"
-    hook_cmd = (
-        f"CITA_RECORDING={replay_dir}/recording.json CITA_STASH={stash} "
-        f"{venv_py} -m claude_in_the_act.replay"
+    annotation = next(
+        (r for r in reversed(recs) if r.get("type") == "bad_annotation"), {}
     )
-    # Only Bash is hooked: Read/Edit/Write operate natively on the seeded files
-    # (so the harness's read-before-edit tracking works). Bash output that can't
-    # come from a file (git log, etc.) is served from the recording.
-    settings = {
-        "hooks": {
-            "PreToolUse": [
-                {
-                    "matcher": "Bash",
-                    "hooks": [{"type": "command", "command": hook_cmd}],
-                }
-            ]
-        }
-    }
-    claude_dir = replay_dir / ".claude"
-    claude_dir.mkdir()
-    (claude_dir / "settings.json").write_text(json.dumps(settings))
+    patch_path = None
+    pf = (annotation.get("git") or {}).get("patchFile")
+    if pf:
+        patch_path = stored.parent / pf
 
-    # Restore prior conversation via --resume; but a single-turn capture has no
-    # messages before the prompt, and `--resume` rejects an empty session — so
-    # run a fresh `claude -p` in that case.
+    replay_root = Path(tempfile.mkdtemp()).resolve()
+    repo = replay_root / "repo"
+    source = reconstruct(annotation, patch_path, repo)
+    repo = repo.resolve()
+
+    # Single-turn captures have no prior messages; `--resume` rejects an empty
+    # session, so run a fresh `claude -p` in that case.
     has_convo = any(r.get("type") in ("user", "assistant") for r in split["context"])
-    tool_args = ["--allowed-tools", "Read", "Bash", "Write", "Edit"]
-    base = ["-p", prompt, "--output-format", "json", "--model", model, *tool_args]
-    proj = Path.home() / ".claude" / "projects" / _slug(str(replay_dir))
+    base = [
+        "-p",
+        prompt,
+        "--output-format",
+        "json",
+        "--model",
+        model,
+        "--permission-mode",
+        "acceptEdits",
+        "--allowed-tools",
+        "Read",
+        "Edit",
+        "Write",
+        "Bash",
+        "Grep",
+        "Glob",
+    ]
+    proj = Path.home() / ".claude" / "projects" / _slug(str(repo))
     planted = None
     if has_convo:
         proj.mkdir(parents=True, exist_ok=True)
@@ -126,7 +147,7 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
     else:
         cmd = ["claude", *base]
 
-    proc = subprocess.run(cmd, cwd=replay_dir, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=repo, capture_output=True, text=True)
     recreated = ""
     if proc.stdout.strip():
         try:
@@ -140,21 +161,18 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
         except OSError:
             pass
 
-    log_path = stash / "replay.log"
-    replay_log = log_path.read_text() if log_path.exists() else ""
     result = {
         "original": original,
         "recreated": recreated,
         "prompt": prompt,
         "model": model,
-        "replay_log": replay_log,
+        "source": source,
         "returncode": proc.returncode,
         "stderr": proc.stderr[-2000:],
-        "stdout_head": proc.stdout[:500],
-        "replay_dir": str(replay_dir),
+        "replay_dir": str(replay_root),
     }
-    if recreated and replay_log:
-        shutil.rmtree(replay_dir, ignore_errors=True)  # only clean on success
+    if recreated:
+        shutil.rmtree(replay_root, ignore_errors=True)
     return result
 
 
