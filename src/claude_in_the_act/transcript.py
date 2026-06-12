@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+import re
+
+_LINENO = re.compile(r"^\s*\d+\t")
+
+
+def denumber(rendered: str) -> str:
+    """Recover raw file content from Read's ``<lineno>\\t<line>`` rendering."""
+    return "\n".join(_LINENO.sub("", line) for line in rendered.split("\n"))
+
 
 def assistant_text(rec: dict) -> str | None:
     """Joined text of an assistant record, or None if it isn't a text-bearing

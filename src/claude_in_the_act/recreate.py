@@ -30,7 +30,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from claude_in_the_act.transcript import split_transcript
+from claude_in_the_act.transcript import denumber, split_transcript, user_text
 
 
 def _slug(path: str) -> str:
@@ -40,6 +40,151 @@ def _slug(path: str) -> str:
 
 def _git(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], capture_output=True, text=True)
+
+
+_MUTATOR_TOKENS = (
+    "rm ",
+    "rmdir",
+    "mv ",
+    "cp ",
+    "sed -i",
+    "perl -i",
+    "tee ",
+    "touch ",
+    "mkdir",
+    "dd ",
+    "truncate",
+    "ln ",
+    "chmod",
+    "chown",
+    "git checkout",
+    "git reset",
+    "git clean",
+    "git stash",
+    "git apply",
+    "git restore",
+    "git rm",
+    "git mv",
+    "install",
+    "cargo build",
+    "make ",
+    "go build",
+)
+
+
+def _mutating_bash(cmd: str) -> bool:
+    """Heuristic: could this shell command have changed the file tree? Over-flags
+    (e.g. `> /dev/null`) on purpose — the flag is informational, not a gate."""
+    if re.search(r"(?<![0-9&])>>?(?!&)", cmd):  # redirection to a file
+        return True
+    return any(tok in cmd for tok in _MUTATOR_TOKENS)
+
+
+def _resolve(repo: Path, orig_cwd: str | None, file_path: str) -> Path:
+    """Map a recorded file path into the reconstructed repo."""
+    p = Path(file_path)
+    if orig_cwd:
+        try:
+            return repo / p.relative_to(orig_cwd)
+        except ValueError:
+            pass
+    return repo / (p.name if p.is_absolute() else p)
+
+
+def _relpath(orig_cwd: str | None, file_path: str) -> str | None:
+    if not orig_cwd:
+        return None
+    try:
+        return str(Path(file_path).relative_to(orig_cwd))
+    except ValueError:
+        return None
+
+
+def undo_last_turn(recs: list[dict], repo: Path) -> dict:
+    """Reverse the final assistant turn's Write/Edit on the reconstructed
+    (post-turn) tree to approximate the PRE-turn state — so the replayed model
+    faces the situation it originally did, not the aftermath of its own actions.
+
+    Flags Bash commands that could have mutated the tree (those can't be reversed
+    from the transcript). Returns {preTurnExact, undone, bashMutations}.
+    """
+    recs_na = [r for r in recs if r.get("type") != "bad_annotation"]
+    orig_cwd = next((r.get("cwd") for r in reversed(recs_na) if r.get("cwd")), None)
+    user_idxs = [i for i, r in enumerate(recs_na) if user_text(r) is not None]
+    if not user_idxs:
+        return {"preTurnExact": True, "undone": [], "bashMutations": []}
+    last_user = user_idxs[-1]
+
+    # Latest observed content of each file BEFORE the last turn (Read result /
+    # Write content) — used to restore files the last turn overwrote.
+    prior: dict[str, str] = {}
+    read_files: dict[str, str] = {}
+    for r in recs_na[: last_user + 1]:
+        content = (r.get("message") or {}).get("content")
+        if r.get("type") == "assistant" and isinstance(content, list):
+            for b in content:
+                if b.get("type") == "tool_use" and b.get("name") == "Read":
+                    read_files[b["id"]] = b["input"].get("file_path")
+                elif b.get("type") == "tool_use" and b.get("name") == "Write":
+                    prior[b["input"].get("file_path")] = b["input"].get("content", "")
+        if r.get("type") == "user" and isinstance(content, list):
+            for b in content:
+                if b.get("type") == "tool_result":
+                    fp = read_files.get(b.get("tool_use_id"))
+                    rc = b.get("content")
+                    if fp and isinstance(rc, str):
+                        prior[fp] = denumber(rc)
+
+    calls: list[tuple[str, dict]] = []
+    for r in recs_na[last_user + 1 :]:
+        if r.get("type") == "assistant":
+            for b in (r.get("message") or {}).get("content") or []:
+                if isinstance(b, dict) and b.get("type") == "tool_use":
+                    calls.append((b["name"], b["input"]))
+
+    undone: list[str] = []
+    bash_mutations: list[str] = []
+    for name, inp in reversed(calls):  # undo in reverse order
+        if name == "Edit":
+            target = _resolve(repo, orig_cwd, inp.get("file_path", ""))
+            old, new = inp.get("old_string", ""), inp.get("new_string", "")
+            if target.exists() and new:
+                txt = target.read_text()
+                txt = (
+                    txt.replace(new, old)
+                    if inp.get("replace_all")
+                    else txt.replace(new, old, 1)
+                )
+                target.write_text(txt)
+                undone.append(f"Edit {inp.get('file_path')}")
+        elif name == "Write":
+            fp = inp.get("file_path", "")
+            target = _resolve(repo, orig_cwd, fp)
+            rel = _relpath(orig_cwd, fp)
+            if fp in prior:  # overwrote a file we'd seen — restore prior content
+                target.write_text(prior[fp])
+                undone.append(f"Write(restore) {fp}")
+            elif (
+                rel
+                and _git("-C", str(repo), "cat-file", "-e", f"HEAD:{rel}").returncode
+                == 0
+            ):
+                show = _git("-C", str(repo), "show", f"HEAD:{rel}")
+                if show.returncode == 0:
+                    target.write_text(show.stdout)
+                    undone.append(f"Write(HEAD) {fp}")
+            else:  # new file this turn — delete it
+                if target.exists():
+                    target.unlink()
+                undone.append(f"Write(delete) {fp}")
+        elif name == "Bash" and _mutating_bash(inp.get("command", "")):
+            bash_mutations.append(inp.get("command", "")[:160])
+
+    return {
+        "preTurnExact": not bash_mutations,
+        "undone": undone,
+        "bashMutations": bash_mutations,
+    }
 
 
 def reconstruct(annotation: dict, patch_path: Path | None, dest: Path) -> str:
@@ -116,6 +261,10 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
     source = reconstruct(annotation, patch_path, repo)
     repo = repo.resolve()
 
+    # The patch is post-turn, so the reconstruction includes the bad turn's own
+    # Write/Edit. Reverse them so the model faces the PRE-turn situation.
+    undo = undo_last_turn(recs, repo)
+
     # Single-turn captures have no prior messages; `--resume` rejects an empty
     # session, so run a fresh `claude -p` in that case.
     has_convo = any(r.get("type") in ("user", "assistant") for r in split["context"])
@@ -170,6 +319,9 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
         "returncode": proc.returncode,
         "stderr": proc.stderr[-2000:],
         "replay_dir": str(replay_root),
+        "preTurnExact": undo["preTurnExact"],
+        "undone": undo["undone"],
+        "bashMutations": undo["bashMutations"],
     }
     if recreated:
         shutil.rmtree(replay_root, ignore_errors=True)
