@@ -153,7 +153,7 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
         f'✎ BAD response captured — feedback: "{feedback}"\n'
         f"  bundle:  {out.resolve()} ({records} records{patch_note})\n"
         f"  (fill the goodResponse field in that jsonl with your ideal answer)\n"
-        f"  re-run:  uv run --project {project} cita-recreate {out.resolve()}"
+        f"  judge:   uv run --project {project} cita-judge {out.resolve()} [model]"
     )
 
 

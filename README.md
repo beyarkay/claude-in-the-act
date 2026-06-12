@@ -63,40 +63,46 @@ We store **verbatim** rather than stripping the ~4% throwaway records
 eval format isn't locked, lossy-at-capture is irreversible, and filtering is
 free at read-time.
 
-## Replaying a captured response
+## Judging a captured response
 
 ```
-uv run cita-recreate data/<...>.jsonl [model]
+uv run cita-judge data/<...>.jsonl [model]
 ```
 
-`cita-recreate` regenerates the final assistant turn in a fresh, independent
-headless session and prints `{original, recreated, prompt, model}` so you can
-diff the stored (bad) response against a fresh one — e.g. pass a newer model id
-to see whether it does better.
+`cita-judge` is the single entry point: it **regenerates** the flagged response
+and then **judges** it — there's deliberately no recreate-without-judge command.
+It prints `{bundle, feedback, score, rationale, regenModel, prompt, original,
+recreated, hadGoodResponse}`. Pass a model id (2nd arg) to evaluate a specific
+model under the *current* harness — e.g. `claude-fable-5` to see whether a newer
+model fixes what you disliked. The judge itself runs on a different model
+(`claude-sonnet-4-6`) to avoid self-bias.
 
-Two paths:
+**Regeneration** (the first half of `cita-judge`) restores the pre-turn
+situation and re-runs the model, via one of two paths:
 
 - **Tool-free turns** (`recreate`): drop the final assistant + user turns,
   restore the rest via `claude --resume --fork-session` in an isolated temp dir,
   re-issue the final user message, tools off. Pure-text regeneration, fully
   self-contained. Good for reasoning/judgement/verbosity critiques.
 - **Tool-using turns** (`recreate_with_tools`): **reconstruct the real repo** and
-  run real tools against it. It `git clone`s the captured remote (default; the
-  original local path as fallback), checks out the captured `git.sha`, and
-  `git apply`s the `.patch` (tracked + untracked) into a `/tmp` dir, then runs
-  `claude --resume` there. The harness sees a **real git repo**, so environment-
-  aware reasoning (git status, `.gitignore`, dir layout) is correct and every
-  tool runs for real — no mocking.
+  run real tools against it — a detached `git worktree` off the local repo
+  (fallback: clone the remote / local path), checkout the captured `git.sha`,
+  `git apply` the `.patch`, then **undo the bad turn's own Write/Edit** so the
+  model faces the genuine pre-turn state. Runs `claude --resume` there (with the
+  resumed context's paths rewritten to the worktree, so it never touches the
+  real repo). The harness sees a **real git repo**, so environment-aware
+  reasoning (git status, `.gitignore`, dir layout) is correct.
 
 The harness **rebuilds the system prompt + tool schemas fresh at launch**, so a
 replay tracks the *current* harness/model and the eval picks up harness
 improvements for free.
 
-**Reconstruction requires git to be reachable at replay time** — a live remote
-with the SHA pushed, or the original local repo. It is *not* self-contained (we
-traded self-containment for environment fidelity). Known nuance: the `.patch` is
-captured *after* the bad turn, so a turn's own file writes are present in the
-reconstruction (the replayed model may note "already exists").
+**Reconstruction requires git to be reachable** — the local repo (worktree) or a
+remote with the SHA. It is *not* self-contained (we traded self-containment for
+environment fidelity), and it's *working-tree* isolation, not hard isolation (a
+`git push` from the worktree could still reach the real remote). Bash commands
+in the bad turn that mutate files can't be reversed from the transcript, so the
+result flags `preTurnExact: false` when that happens.
 
 ## Install
 
@@ -123,7 +129,9 @@ under `hooks.UserPromptSubmit`:
 flag-bad-response.sh         thin UserPromptSubmit gate (bash + jq)
 src/claude_in_the_act/
   capture.py                 cita-capture: snapshot transcript + git state
-  recreate.py                cita-recreate: replay the final assistant turn
+  transcript.py              shared record helpers (split, denumber)
+  recreate.py                regeneration: reconstruct pre-turn repo + replay
+  judge.py                   cita-judge: regenerate + LLM-judge vs feedback
 tests/                       pytest suite (unit + marked e2e)
 data/                        captured <ts>-<session>.jsonl (+ .patch) snapshots (git-ignored)
 pyproject.toml               uv project; console scripts; pytest config

@@ -25,7 +25,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -423,31 +422,3 @@ def recreate(stored: Path, model_override: str | None = None) -> dict[str, str]:
         "original": original,
         "recreated": recreated,
     }
-
-
-def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: cita-recreate <stored.jsonl> [model]", file=sys.stderr)
-        return 1
-    stored = Path(sys.argv[1])
-    model_override = sys.argv[2] if len(sys.argv) > 2 else None
-    if not stored.is_file():
-        print(f"no such file: {stored}", file=sys.stderr)
-        return 1
-    # Reconstruction (real repo + real tools) when the capture has git state;
-    # otherwise the tool-free regeneration.
-    recs = [
-        json.loads(line) for line in stored.read_text().splitlines() if line.strip()
-    ]
-    has_git = any(
-        (r.get("git") or {}).get("sha")
-        for r in recs
-        if r.get("type") == "bad_annotation"
-    )
-    fn = recreate_with_tools if has_git else recreate
-    print(json.dumps(fn(stored, model_override), indent=2))
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

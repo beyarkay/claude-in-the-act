@@ -7,8 +7,7 @@ dependencies = []  # stdlib only at runtime
 
 [project.scripts]
 cita-capture = "claude_in_the_act.capture:main"
-cita-recreate = "claude_in_the_act.recreate:main"
-cita-judge = "claude_in_the_act.judge:main"
+cita-judge = "claude_in_the_act.judge:main"  # regenerate + judge in one step
 
 [build-system]
 requires = ["hatchling"]
