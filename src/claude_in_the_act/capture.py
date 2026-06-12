@@ -27,6 +27,8 @@ import tempfile
 from datetime import datetime
 from pathlib import Path
 
+from claude_in_the_act.transcript import final_response
+
 PREFIX = "BAD: "
 DEFAULT_DATA_DIR = Path.home() / "projects" / "claude-in-the-act" / "data"
 
@@ -122,9 +124,17 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
 
     git_info = capture_git(cwd, base.with_suffix(".patch"))
 
+    # The flagged response is a machine-readable triple in the annotation: the
+    # bad response (extracted), the user's feedback, and a goodResponse slot to
+    # be filled in later (the eval's gold target — left null at capture time).
+    transcript_recs = [
+        json.loads(line) for line in out.read_text().splitlines() if line.strip()
+    ]
     annotation = {
         "type": "bad_annotation",
-        "critique": critique,
+        "feedback": critique,
+        "badResponse": final_response(transcript_recs),
+        "goodResponse": None,
         "sessionId": session,
         "cwd": cwd,
         "capturedAt": ts,
@@ -132,17 +142,6 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
     }
     with out.open("a") as f:
         f.write(json.dumps(annotation) + "\n")
-
-    # Human-editable sidecar: your feedback + a slot to hand-write the response
-    # you actually wanted (the eval's gold target).
-    sidecar = base.with_suffix(".feedback.md")
-    sidecar.write_text(
-        "<!-- claude-in-the-act: your feedback + the response you wanted. "
-        "Edit freely; everything under 'Good response' is yours to fill. -->\n\n"
-        f"# Feedback\n\n{critique}\n\n"
-        "# Good response\n\n"
-        "<!-- Write the response you actually wanted, below this line. -->\n\n"
-    )
 
     records = sum(1 for _ in out.open())
     patch_note = " +patch" if git_info["patchFile"] else ""
@@ -152,9 +151,9 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
     project = DEFAULT_DATA_DIR.parent
     return 2, (
         f'✎ BAD response captured — feedback: "{feedback}"\n'
-        f"  bundle:    {out.resolve()} ({records} records{patch_note})\n"
-        f"  good resp: {sidecar.resolve()}  ← hand-write what you wanted here\n"
-        f"  re-run:    uv run --project {project} cita-recreate {out.resolve()}"
+        f"  bundle:  {out.resolve()} ({records} records{patch_note})\n"
+        f"  (fill the goodResponse field in that jsonl with your ideal answer)\n"
+        f"  re-run:  uv run --project {project} cita-recreate {out.resolve()}"
     )
 
 

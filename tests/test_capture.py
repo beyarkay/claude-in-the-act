@@ -91,7 +91,9 @@ def test_capture_writes_bundle_with_git_and_patch(tmp_path):
     assert len(lines) == 3  # 2 verbatim transcript records + 1 annotation
     ann = json.loads(lines[-1])
     assert ann["type"] == "bad_annotation"
-    assert ann["critique"] == "parrots the codeword"
+    assert ann["feedback"] == "parrots the codeword"
+    assert ann["goodResponse"] is None  # machine-readable slot, filled in later
+    assert "badResponse" in ann
     assert ann["sessionId"] == "sess1"
     assert ann["git"]["sha"]
     assert ann["git"]["branch"] in ("main", "master")

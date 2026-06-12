@@ -2,7 +2,6 @@
 # Stored locally; not versioned by default. Remove these lines to share them.
 data/*.jsonl
 data/*.patch
-data/*.feedback.md
 !data/.gitkeep
 
 # Python / uv
