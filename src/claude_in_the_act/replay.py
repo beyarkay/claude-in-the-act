@@ -23,6 +23,7 @@ from ``CITA_RECORDING`` and writes scratch files under ``CITA_STASH``.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -31,6 +32,15 @@ from pathlib import Path
 
 # Tools we replay by hand (≈95% of real usage). Everything else -> cache miss.
 REPLAYED_TOOLS = {"Read", "Bash", "Write", "Edit"}
+
+
+def _scratch_for(stash: Path, file_path: str) -> Path:
+    """Stable scratch path for an original file path. Read/Edit/Write of the same
+    file map to the SAME scratch, so the read-before-edit invariant holds and
+    Edit inherits the content a prior Read placed there."""
+    h = hashlib.sha1(file_path.encode()).hexdigest()[:16]
+    return stash / f"file-{h}"
+
 
 _LINENO = re.compile(r"^\s*\d+\t")
 
@@ -137,12 +147,32 @@ def handle_pre(payload: dict, recording: list[dict], stash: Path) -> dict | None
     if tool not in REPLAYED_TOOLS:
         return _deny(f"cita-replay: tool {tool!r} not replayed (cache miss)")
 
+    # Write / Edit are ACTIONS, not observations: the model doesn't need recorded
+    # data back, only for them to succeed. Redirect at a scratch file so they
+    # succeed with no real side effect and no recording lookup — the model is
+    # free to "act" as part of its response without touching the filesystem.
+    if tool == "Write":
+        scratch = _scratch_for(stash, tin.get("file_path", tid))
+        return _allow({**tin, "file_path": str(scratch)})
+
+    if tool == "Edit":
+        scratch = _scratch_for(stash, tin.get("file_path", tid))
+        if not scratch.exists():
+            # No prior Read seeded it: put old_string there so Edit can replace.
+            scratch.write_text(tin.get("old_string") or "")
+        return _allow({**tin, "file_path": str(scratch)})
+
+    # Read / Bash are OBSERVATIONS: must be served from the recording.
     entry = match(recording, tool, tin)
     if entry is None:
+        if tool == "Bash":
+            # Let a divergent command run natively against the seeded files
+            # (handles cwd-relative path differences vs the recorded command).
+            return None
         return _deny(f"cita-replay: no recorded {tool} call matching this input")
 
     if tool == "Read":
-        scratch = stash / f"{tid}.read"
+        scratch = _scratch_for(stash, tin.get("file_path", tid))
         scratch.write_text(denumber(entry["content"]))
         return _allow({**tin, "file_path": str(scratch)})
 
@@ -154,8 +184,7 @@ def handle_pre(payload: dict, recording: list[dict], stash: Path) -> dict | None
             cmd += "; exit 1"
         return _allow({**tin, "command": cmd})
 
-    # Write / Edit: TODO (next increment) — for now treat as miss.
-    return _deny(f"cita-replay: {tool} replay not implemented yet")
+    return _deny(f"cita-replay: {tool} unhandled")
 
 
 def main() -> int:

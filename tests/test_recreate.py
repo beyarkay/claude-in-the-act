@@ -173,3 +173,77 @@ def test_capture_then_replay_roundtrip_is_self_contained(tmp_path):
     out = recreate.recreate(stored)
     assert codeword in out["recreated"]
     assert out["recreated"] == out["original"]
+
+
+@pytest.mark.e2e
+def test_tool_replay_read_edit_write_codebase_free(tmp_path):
+    """A turn that Reads + Edits + Writes, captured, then replayed AFTER the repo
+    is deleted — every tool served from the recording (seeded files + Bash hook),
+    nothing on the real filesystem."""
+    if shutil.which("claude") is None:
+        pytest.skip("claude CLI not on PATH")
+
+    work = Path(tempfile.mkdtemp()).resolve()
+    (work / "config.py").write_text("DEBUG = False\nNAME = 'app'\nVERSION = '1.0'\n")
+    sid = str(uuid.uuid4())
+    r = subprocess.run(
+        [
+            "claude",
+            "--session-id",
+            sid,
+            "-p",
+            "Read config.py, use Edit to change DEBUG from False to True, "
+            "and use Write to create flag.txt containing just: enabled",
+            "--output-format",
+            "json",
+            "--permission-mode",
+            "acceptEdits",
+            "--allowed-tools",
+            "Read",
+            "Edit",
+            "Write",
+            "Bash",
+        ],
+        cwd=work,
+        capture_output=True,
+        text=True,
+    )
+    assert r.returncode == 0, r.stderr
+
+    transcript = (
+        Path.home()
+        / ".claude"
+        / "projects"
+        / recreate._slug(str(work))
+        / f"{sid}.jsonl"
+    )
+    assert transcript.is_file()
+
+    from claude_in_the_act.replay import build_recording
+
+    recs = [
+        json.loads(line) for line in transcript.read_text().splitlines() if line.strip()
+    ]
+    tools = {e["tool_name"] for e in build_recording(recs)}
+    assert {"Read", "Edit", "Write"} <= tools, f"recorded tools: {tools}"
+
+    data = tmp_path / "data"
+    capture.process(
+        {
+            "prompt": "BAD: x",
+            "transcript_path": str(transcript),
+            "session_id": sid,
+            "cwd": str(work),
+        },
+        data,
+    )
+    stored = next(data.glob("*.jsonl"))
+
+    # destroy the codebase + original session
+    shutil.rmtree(work, ignore_errors=True)
+    transcript.unlink()
+
+    out = recreate.recreate_with_tools(stored)
+    assert out["returncode"] == 0, out["stderr"]
+    assert out["recreated"].strip()  # produced a response with the repo gone
+    assert "True" in out["recreated"] or "DEBUG" in out["recreated"]

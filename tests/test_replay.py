@@ -116,6 +116,74 @@ def test_handle_pre_read_rewrites_to_temp_with_recorded_content(tmp_path):
     assert Path(new_path).read_text() == "hello\n"  # de-numbered (keeps trailing \n)
 
 
+def test_handle_pre_write_redirects_to_scratch_no_recording_needed(tmp_path):
+    out = replay.handle_pre(
+        {
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/real/x.py", "content": "hi"},
+            "tool_use_id": "z",
+        },
+        [],  # no recording entry needed for an action
+        tmp_path,
+    )
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert out["hookSpecificOutput"]["updatedInput"]["file_path"].startswith(
+        str(tmp_path)
+    )
+
+
+def test_handle_pre_edit_seeds_scratch_with_old_string(tmp_path):
+    from pathlib import Path
+
+    out = replay.handle_pre(
+        {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "/real/x.py",
+                "old_string": "foo",
+                "new_string": "bar",
+            },
+            "tool_use_id": "z",
+        },
+        [],
+        tmp_path,
+    )
+    scratch = Path(out["hookSpecificOutput"]["updatedInput"]["file_path"])
+    assert "foo" in scratch.read_text()  # Edit can find + replace it
+
+
+def test_read_then_edit_share_one_scratch(tmp_path):
+    """Read seeds the scratch with recorded content; a later Edit of the SAME
+    file reuses it (read-before-edit invariant holds)."""
+    rec = replay.build_recording(_transcript_with_tools())  # has Read /x/foo.py
+    read_out = replay.handle_pre(
+        {
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/x/foo.py"},
+            "tool_use_id": "a",
+        },
+        rec,
+        tmp_path,
+    )
+    edit_out = replay.handle_pre(
+        {
+            "tool_name": "Edit",
+            "tool_input": {
+                "file_path": "/x/foo.py",
+                "old_string": "hello",
+                "new_string": "hi",
+            },
+            "tool_use_id": "b",
+        },
+        rec,
+        tmp_path,
+    )
+    assert (
+        read_out["hookSpecificOutput"]["updatedInput"]["file_path"]
+        == edit_out["hookSpecificOutput"]["updatedInput"]["file_path"]
+    )
+
+
 def test_handle_pre_bash_rewrites_to_cat_recorded_stdout(tmp_path):
     rec = replay.build_recording(_transcript_with_tools())
     out = replay.handle_pre(

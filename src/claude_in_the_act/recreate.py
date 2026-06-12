@@ -65,16 +65,41 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
     stash.mkdir()
     (replay_dir / "recording.json").write_text(json.dumps(recording))
 
+    # Seed recorded files into the sandbox at cwd-relative paths. Edit (unlike
+    # Read) pre-checks that the file EXISTS before the hook runs, so the file
+    # must be present for the hook to then redirect it. Content still comes from
+    # the recording (no real codebase needed).
+    orig_cwd = next((r.get("cwd") for r in reversed(recs) if r.get("cwd")), None)
+    if orig_cwd:
+        from claude_in_the_act.replay import denumber
+
+        for entry in recording:
+            if entry["tool_name"] != "Read":
+                continue
+            try:
+                rel = Path(entry["input"]["file_path"]).relative_to(orig_cwd)
+            except (ValueError, KeyError):
+                continue
+            dest = replay_dir / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                dest.write_text(denumber(entry["content"]))
+            except OSError:
+                pass
+
     venv_py = _cita_root() / ".venv" / "bin" / "python"
     hook_cmd = (
         f"CITA_RECORDING={replay_dir}/recording.json CITA_STASH={stash} "
         f"{venv_py} -m claude_in_the_act.replay"
     )
+    # Only Bash is hooked: Read/Edit/Write operate natively on the seeded files
+    # (so the harness's read-before-edit tracking works). Bash output that can't
+    # come from a file (git log, etc.) is served from the recording.
     settings = {
         "hooks": {
             "PreToolUse": [
                 {
-                    "matcher": "Read|Bash|Write|Edit",
+                    "matcher": "Bash",
                     "hooks": [{"type": "command", "command": hook_cmd}],
                 }
             ]
