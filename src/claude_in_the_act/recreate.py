@@ -67,10 +67,12 @@ def split_transcript(recs: list[dict]) -> dict:
         raise ValueError("no string user turn found to replay")
     last_user = user_idxs[-1]
 
-    original = next(
-        (t for r in recs[last_user + 1 :] if (t := _assistant_text(r)) is not None),
-        "",
-    )
+    # The original response is ALL assistant text after the prompt (a turn can
+    # span several records: thinking-only / tool_use-only ones have no text and
+    # must be skipped, not treated as the answer).
+    original = "\n\n".join(
+        t for r in recs[last_user + 1 :] if (t := _assistant_text(r))
+    ).strip()
     model = next(
         (
             r["message"]["model"]

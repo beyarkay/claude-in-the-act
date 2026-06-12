@@ -56,6 +56,53 @@ def test_split_transcript_raises_without_user_turn():
         recreate.split_transcript([{"type": "assistant", "message": {"content": []}}])
 
 
+def test_split_transcript_skips_thinking_and_tool_only_turns():
+    """A turn spans several records; thinking-only / tool_use-only ones have no
+    text and must not be mistaken for the response (regression)."""
+    recs = [
+        {"type": "user", "message": {"content": "summarise the repo"}},
+        {
+            "type": "assistant",
+            "message": {
+                "model": "m",
+                "content": [{"type": "thinking", "thinking": "hmm"}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "model": "m",
+                "content": [{"type": "text", "text": "Let me look."}],
+            },
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "model": "m",
+                "content": [{"type": "tool_use", "name": "Read", "input": {}}],
+            },
+        },
+        {
+            "type": "user",
+            "message": {"content": [{"type": "tool_result", "content": "x"}]},
+        },
+        {
+            "type": "assistant",
+            "message": {
+                "model": "m",
+                "content": [{"type": "text", "text": "Here is the summary."}],
+            },
+        },
+    ]
+    out = recreate.split_transcript(recs)
+    assert (
+        out["prompt"] == "summarise the repo"
+    )  # tool_result (list) isn't a user prompt
+    assert (
+        out["original"] == "Let me look.\n\nHere is the summary."
+    )  # both text turns, joined
+
+
 @pytest.mark.e2e
 def test_capture_then_replay_roundtrip_is_self_contained(tmp_path):
     """Full loop: real 2-turn session → capture → delete original dir + session
