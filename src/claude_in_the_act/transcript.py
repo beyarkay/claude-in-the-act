@@ -63,12 +63,30 @@ def assistant_text(rec: dict) -> str | None:
 
 
 def user_text(rec: dict) -> str | None:
-    """The string content of a real user prompt, or None.
+    """The string content of a *real* (user-authored) prompt, or None.
 
-    Tool results and the ``[Request interrupted by user]`` injection are
-    list-content user records and return None — so they're never mistaken for a
-    prompt."""
+    Two kinds of non-prompt ``user`` records must never be mistaken for the
+    prompt to replay:
+
+    * Tool results and the ``[Request interrupted by user]`` injection — these
+      carry *list* content, so the ``isinstance(..., str)`` check drops them.
+    * Harness-injected string-content turns — most notably background-task
+      completion notifications (``<task-notification>…``), which Claude Code
+      records as ``type:"user"`` with ``promptSource:"system"`` /
+      ``origin.kind:"task-notification"``. Without this guard ``split_transcript``
+      would pick the notification as the prompt and replay the model against a
+      synthetic message (with a stale ``tool-use-id``) instead of your words.
+
+    Detection keys on the structured fields, not the text — a genuinely *typed*
+    or *queued* message may itself start with ``<`` (e.g. a queued turn carries a
+    ``<system-reminder>Message sent at …</system-reminder>`` prefix), so a
+    prefix match would wrongly drop real prompts.
+    """
     if rec.get("type") != "user":
+        return None
+    if rec.get("promptSource") == "system":
+        return None
+    if (rec.get("origin") or {}).get("kind") == "task-notification":
         return None
     content = rec.get("message", {}).get("content")
     return content if isinstance(content, str) else None
