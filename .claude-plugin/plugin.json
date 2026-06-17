@@ -1,0 +1,10 @@
+{
+  "name": "claude-in-the-act",
+  "description": "Flag a bad Claude Code response with `BAD: <why>` and snapshot the session transcript + git state to a local eval set.",
+  "version": "0.1.0",
+  "author": {
+    "name": "beyarkay"
+  },
+  "homepage": "https://github.com/beyarkay/claude-in-the-act",
+  "license": "MIT"
+}

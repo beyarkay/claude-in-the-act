@@ -54,10 +54,15 @@ response you _actually_ wanted. The judge will hold regenerations to that gold
 standard. Skip it and the judge scores against your written feedback alone —
 still useful, just less precise.
 
+> **Note:** capture is the part that ships as a plugin. The regenerate +
+> judge tooling below (steps 3–4) currently runs from a **source checkout** of
+> this repo (`uv run …`) and isn't wired into the plugin yet — packaging it as
+> one-click slash commands is the next step.
+
 ### 3. Regenerate + judge a single capture
 
 ```
-uv run cita-judge data/<timestamp>-<session>.jsonl [model]
+uv run cita-judge ~/.claude/claude-in-the-act/data/<timestamp>-<session>.jsonl [model]
 ```
 
 This is the single entry point. It **regenerates** the flagged turn under the
@@ -102,28 +107,32 @@ SHA). It's working-tree isolation, not a hard sandbox.
 
 ## Getting started
 
-You need [`uv`](https://docs.astral.sh/uv/) and `jq` on your `PATH`. Runtime is
-stdlib-only — no install step beyond cloning.
+Capture ships as a Claude Code **plugin**. The only requirement is `python3`
+(≥3.11) on your `PATH` — the runtime is stdlib-only, so there's no `pip`, venv,
+`uv`, or `jq` to install. From inside Claude Code:
 
-Activate the capture hook with one entry in `~/.claude/settings.json` under
-`hooks.UserPromptSubmit`:
-
-```json
-{
-  "matcher": "",
-  "hooks": [
-    { "type": "command", "command": "/Users/brk/projects/claude-in-the-act/flag-bad-response.sh" }
-  ]
-}
+```
+/plugin marketplace add beyarkay/claude-in-the-act
+/plugin install claude-in-the-act@claude-in-the-act
 ```
 
-(If Claude set this repo up for you, it's already wired in.)
+That registers the `UserPromptSubmit` hook automatically — no `settings.json`
+editing. To try it before it's published anywhere, point the marketplace at a
+local checkout instead:
+
+```
+/plugin marketplace add /path/to/claude-in-the-act
+/plugin install claude-in-the-act@claude-in-the-act
+```
 
 Now go use Claude Code as normal. The next time it disappoints you, type
-`BAD: ...` and you've started your eval set.
+`BAD: ...` and you've started your eval set. Captures land in
+`~/.claude/claude-in-the-act/data/` (override with `CITA_DATA_DIR`).
 
-## A note on `data/`
+## A note on your captures
 
 Captures are full session transcripts — they can contain file contents, paths,
-and secrets. `data/*.jsonl` and `data/*.patch` are git-ignored by default.
-Delete those ignore rules only if you intend to version or share the collection.
+and secrets. They're written to `~/.claude/claude-in-the-act/data/`, **outside**
+any git repo, so they're never accidentally committed. That directory also
+survives `/plugin update` (the plugin's own install dir does not). Treat it as
+private; back it up or sync it deliberately, not by accident.

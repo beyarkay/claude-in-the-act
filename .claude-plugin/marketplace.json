@@ -1,0 +1,14 @@
+{
+  "name": "claude-in-the-act",
+  "owner": {
+    "name": "beyarkay"
+  },
+  "description": "A one-plugin marketplace: claude-in-the-act, for banking bad Claude Code responses as a personal eval set.",
+  "plugins": [
+    {
+      "name": "claude-in-the-act",
+      "source": "./",
+      "description": "Flag a bad response with `BAD: <why>`; it snapshots the transcript + git state to ~/.claude/claude-in-the-act/data."
+    }
+  ]
+}
