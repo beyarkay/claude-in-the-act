@@ -125,9 +125,15 @@ local checkout instead:
 /plugin install claude-in-the-act@claude-in-the-act
 ```
 
+**Then restart Claude Code** — quit your session and relaunch. Hooks are
+registered at session start, so capture won't fire in a session that was already
+open when you installed (you'd type `BAD: …` and nothing would happen).
+
 Now go use Claude Code as normal. The next time it disappoints you, type
-`BAD: ...` and you've started your eval set. Captures land in
-`~/.claude/claude-in-the-act/data/` (override with `CITA_DATA_DIR`).
+`BAD: <what was wrong>` and you've started your eval set — you'll get a
+`✎ BAD response captured` confirmation and the prompt won't reach the model.
+Captures land in `~/.claude/claude-in-the-act/data/` (override with
+`CITA_DATA_DIR`).
 
 ## A note on your captures
 
