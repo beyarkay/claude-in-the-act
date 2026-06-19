@@ -82,6 +82,7 @@ def test_capture_writes_bundle_with_git_and_patch(tmp_path):
     assert "captured" in msg
     assert "goodResponse" in msg  # points the user at the slot to fill in
     assert "parrots the codeword" in msg  # the feedback snippet
+    assert "session:" in msg  # the nice-to-look-at metrics line
 
     jsonls = list(data.glob("*.jsonl"))
     patches = list(data.glob("*.patch"))
@@ -99,6 +100,15 @@ def test_capture_writes_bundle_with_git_and_patch(tmp_path):
     assert ann["git"]["sha"]
     assert ann["git"]["branch"] in ("main", "master")
     assert ann["git"]["patchFile"] == patches[0].name
+
+    m = ann["metrics"]  # derived counts ride along in the annotation
+    assert m["records"] == 2  # the 2 transcript records (annotation excluded)
+    assert m["userPrompts"] == 1
+    assert m["assistantRecords"] == 1
+    assert m["toolUses"] == 0
+    assert m["flaggedResponseChars"] == len("hello")
+    assert m["model"] == "claude-opus-4-8"
+    assert m["transcriptBytes"] > 0
 
     patch = patches[0].read_text()
     assert "main.py" in patch  # tracked edit

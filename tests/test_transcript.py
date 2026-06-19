@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from claude_in_the_act.transcript import (
+    bundle_metrics,
     final_response,
     split_transcript,
     user_text,
@@ -124,3 +125,51 @@ def test_split_prefers_last_real_prompt_over_notification():
     assert split["prompt"] == "second question"
     assert "first answer" not in split["original"]
     assert "answer after the notification" in split["original"]
+
+
+def _assistant_tool(name: str = "Bash") -> dict:
+    return {
+        "type": "assistant",
+        "message": {
+            "role": "assistant",
+            "model": "claude-x",
+            "content": [{"type": "tool_use", "name": name, "input": {}}],
+        },
+    }
+
+
+def test_bundle_metrics_counts():
+    recs = [
+        _typed("do a thing"),
+        _assistant("sure, working on it"),
+        _assistant_tool(),  # tool use, inside the flagged turn
+        _assistant("done — here is the result"),
+        {"type": "bad_annotation", "feedback": "x"},  # excluded from every count
+    ]
+    m = bundle_metrics(recs)
+    assert m["records"] == 4  # annotation not counted
+    assert m["userPrompts"] == 1
+    assert m["assistantRecords"] == 3
+    assert m["toolUses"] == 1
+    assert m["flaggedTurnToolUses"] == 1
+    assert m["flaggedResponseChars"] == len(final_response(recs))
+    assert m["model"] == "claude-x"
+    assert "sessionSpanMinutes" not in m  # no timestamps in these records
+
+
+def test_bundle_metrics_span_and_no_prompt():
+    def at(ts: str, text: str) -> dict:
+        return {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}],
+            },
+            "timestamp": ts,
+        }
+
+    recs = [at("2026-06-15T10:00:00Z", "orphan"), at("2026-06-15T10:30:00Z", "later")]
+    m = bundle_metrics(recs)
+    assert m["userPrompts"] == 0
+    assert m["sessionSpanMinutes"] == 30
+    assert m["flaggedResponseChars"] == 0  # no real prompt -> no flagged response

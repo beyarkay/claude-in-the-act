@@ -32,6 +32,7 @@ from claude_in_the_act.harness import git_out
 from claude_in_the_act.transcript import (
     ANNOTATION_TYPE,
     GOOD_RESPONSE_PLACEHOLDER,
+    bundle_metrics,
     final_response,
     load_bundle,
 )
@@ -122,30 +123,41 @@ def process(payload: dict, data_dir: Path) -> tuple[int, str | None]:
 
     git_info = capture_git(cwd, base.with_suffix(".patch"))
 
+    # Derived once from the verbatim transcript (before our annotation is
+    # appended), so transcriptBytes is the real session size, not inflated by us.
+    recs = load_bundle(out)
+    metrics = bundle_metrics(recs)
+    metrics["transcriptBytes"] = out.stat().st_size
+
     # The flagged response is a machine-readable triple in the annotation: the
     # bad response (extracted), the user's feedback, and a goodResponse slot the
     # user fills in later (the eval's gold target — a placeholder at capture).
+    # `metrics` rides along as nice-to-look-at counts (turns, tools, size).
     annotation = {
         "type": ANNOTATION_TYPE,
         "feedback": critique,
-        "badResponse": final_response(load_bundle(out)),
+        "badResponse": final_response(recs),
         "goodResponse": GOOD_RESPONSE_PLACEHOLDER,
         "sessionId": session,
         "cwd": cwd,
         "capturedAt": ts,
         "git": git_info,
+        "metrics": metrics,
     }
     with out.open("a") as f:
         f.write(json.dumps(annotation) + "\n")
 
-    records = sum(1 for _ in out.open())
     patch_note = " +patch" if git_info["patchFile"] else ""
+    approx_tok = round(metrics["transcriptBytes"] / 4 / 1000)
     feedback = " ".join(critique.split())
     if len(feedback) > 70:
         feedback = feedback[:67] + "..."
     return 2, (
         f'✎ BAD response captured — feedback: "{feedback}"\n'
-        f"  bundle:  {out.resolve()} ({records} records{patch_note})\n"
+        f"  bundle:  {out.resolve()}{patch_note}\n"
+        f"  session: {metrics['records']} records · {metrics['userPrompts']} prompts · "
+        f"{metrics['toolUses']} tool uses · ~{approx_tok}k tok · "
+        f"flagged reply {metrics['flaggedResponseChars']} chars\n"
         f"  (optional: fill the goodResponse field in that jsonl with your ideal answer)"
     )
 

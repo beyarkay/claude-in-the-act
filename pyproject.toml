@@ -9,6 +9,7 @@ dependencies = []  # stdlib only at runtime
 cita-capture = "claude_in_the_act.capture:main"
 cita-judge = "claude_in_the_act.judge:main"  # regenerate + judge in one step
 cita-eval = "claude_in_the_act.evaluate:main"  # judge all transcripts -> report
+cita-view = "claude_in_the_act.viewer:main"  # build + open the HTML transcript viewer
 
 [build-system]
 requires = ["hatchling"]

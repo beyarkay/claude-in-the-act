@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 # The record type we append to a captured bundle (the feedback/good/bad triple).
@@ -133,3 +134,64 @@ def final_response(recs: list[dict]) -> str:
         return split_transcript(recs)["original"]
     except ValueError:
         return ""
+
+
+def _tool_use_count(rec: dict) -> int:
+    """Number of tool_use blocks in an assistant record (0 for anything else)."""
+    content = rec.get("message", {}).get("content")
+    if not isinstance(content, list):
+        return 0
+    return sum(
+        1 for b in content if isinstance(b, dict) and b.get("type") == "tool_use"
+    )
+
+
+def _parse_ts(value: object) -> datetime | None:
+    """Parse a transcript ISO timestamp (``…Z``), or None if absent/malformed."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def bundle_metrics(recs: list[dict]) -> dict:
+    """Nice-to-look-at counts derived from a captured transcript's records.
+
+    Best-effort and side-effect-free: each field is computed independently, and
+    a transcript that can't yield one (no timestamps, no assistant turn) just
+    omits it rather than raising. The ``bad_annotation`` record itself is
+    excluded so re-deriving metrics from an already-annotated bundle is stable.
+    """
+    body = [r for r in recs if r.get("type") != ANNOTATION_TYPE]
+    prompt_idxs = [i for i, r in enumerate(body) if user_text(r) is not None]
+    assistants = [r for r in body if r.get("type") == "assistant"]
+
+    # The flagged turn is the assistant work after the last real user prompt.
+    flagged = body[prompt_idxs[-1] + 1 :] if prompt_idxs else []
+
+    metrics: dict = {
+        "records": len(body),
+        "userPrompts": len(prompt_idxs),
+        "assistantRecords": len(assistants),
+        "toolUses": sum(_tool_use_count(r) for r in assistants),
+        "flaggedResponseChars": len(final_response(recs)),
+        "flaggedTurnToolUses": sum(_tool_use_count(r) for r in flagged),
+    }
+    model = next(
+        (
+            r["message"]["model"]
+            for r in reversed(assistants)
+            if r.get("message", {}).get("model")
+        ),
+        "",
+    )
+    if model:
+        metrics["model"] = model
+    stamps = [t for r in body if (t := _parse_ts(r.get("timestamp")))]
+    if len(stamps) >= 2:
+        metrics["sessionSpanMinutes"] = round(
+            (max(stamps) - min(stamps)).total_seconds() / 60
+        )
+    return metrics

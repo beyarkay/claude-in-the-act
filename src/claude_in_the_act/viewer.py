@@ -1,0 +1,551 @@
+"""Build a single self-contained HTML viewer for captured ``BAD:`` bundles.
+
+Each bundle in ``DATA_DIR`` becomes a "case": the sidebar lists them with a
+slice of your feedback (the complaint), clicking one renders the full chat
+scrolled to the bottom — i.e. to the flagged response, the thing that annoyed
+you. No server: all data is embedded in the page and rendered lazily per case.
+
+Tool noise (file dumps, command output, tool inputs) is truncated so the file
+stays openable; the prompts and assistant prose — the part you actually read —
+are kept whole. ``build_view`` holds the extraction (unit-tested); ``main``
+wires up ``CITA_DATA_DIR`` / ``--out`` and opens a browser.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+import webbrowser
+from pathlib import Path
+
+from claude_in_the_act import DATA_DIR
+from claude_in_the_act.transcript import (
+    ANNOTATION_TYPE,
+    annotation,
+    load_bundle,
+    user_text,
+)
+
+# Caps (chars) so a 19MB transcript doesn't bloat the page. Prose is kept;
+# only machine noise (tool I/O, thinking) is clipped.
+_TOOL_INPUT_CAP = 2000
+_TOOL_RESULT_CAP = 1500
+_THINKING_CAP = 6000
+_TEXT_CAP = 24000
+
+_CLIP = "\n… [clipped]"
+
+
+def _clip(s: str, cap: int) -> str:
+    return s if len(s) <= cap else s[:cap] + _CLIP
+
+
+def _stringify(content: object) -> str:
+    """Flatten a tool_result's content (str, or list of text blocks) to text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for b in content:
+            if isinstance(b, dict):
+                parts.append(b.get("text") or b.get("content") or json.dumps(b))
+            else:
+                parts.append(str(b))
+        return "\n".join(parts)
+    return "" if content is None else str(content)
+
+
+def _assistant_blocks(rec: dict) -> list[dict]:
+    """Renderable blocks of an assistant turn: text / thinking / tool_use."""
+    blocks: list[dict] = []
+    for b in rec.get("message", {}).get("content", []):
+        if not isinstance(b, dict):
+            continue
+        kind = b.get("type")
+        if kind == "text" and b.get("text", "").strip():
+            blocks.append({"k": "text", "text": _clip(b["text"], _TEXT_CAP)})
+        elif kind == "thinking" and b.get("thinking", "").strip():
+            blocks.append({"k": "thinking", "text": _clip(b["thinking"], _THINKING_CAP)})
+        elif kind == "tool_use":
+            try:
+                rendered = json.dumps(b.get("input", {}), indent=2, ensure_ascii=False)
+            except (TypeError, ValueError):
+                rendered = str(b.get("input"))
+            blocks.append(
+                {"k": "tool_use", "name": b.get("name", "tool"),
+                 "input": _clip(rendered, _TOOL_INPUT_CAP)}
+            )
+    return blocks
+
+
+def _messages(recs: list[dict]) -> list[dict]:
+    """Records → ordered chat messages, dropping harness bookkeeping.
+
+    Kept: real user prompts, assistant turns (text/thinking/tool_use), tool
+    results, and the ``[Request interrupted by user]`` marker. Everything else
+    (queue ops, mode changes, snapshots, system records) is skipped.
+    """
+    msgs: list[dict] = []
+    for rec in recs:
+        if rec.get("type") == ANNOTATION_TYPE:
+            continue
+        t = rec.get("type")
+        if t == "assistant":
+            blocks = _assistant_blocks(rec)
+            if blocks:
+                msgs.append({"role": "assistant", "blocks": blocks})
+        elif t == "user":
+            prompt = user_text(rec)
+            if prompt is not None:
+                msgs.append({"role": "user", "text": _clip(prompt, _TEXT_CAP)})
+                continue
+            content = rec.get("message", {}).get("content")
+            if isinstance(content, list):
+                results = [
+                    _clip(_stringify(b.get("content")), _TOOL_RESULT_CAP)
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "tool_result"
+                ]
+                if results:
+                    msgs.append({"role": "tool", "results": results})
+                    continue
+                texts = [
+                    b.get("text", "")
+                    for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                ]
+                if any("interrupted" in x.lower() for x in texts):
+                    msgs.append({"role": "interrupt", "text": "\n".join(texts)})
+    return msgs
+
+
+def _flag_from(msgs: list[dict]) -> int:
+    """Index of the last real user prompt — the flagged exchange starts here
+    (that prompt + every assistant turn after it = the response you flagged).
+    -1 if there is no user prompt."""
+    last = -1
+    for i, m in enumerate(msgs):
+        if m["role"] == "user":
+            last = i
+    return last
+
+
+def _pretty_ts(captured: str) -> str:
+    """``20260618T122734`` → ``2026-06-18 12:27``; pass through anything else."""
+    if len(captured) >= 13 and captured[8] == "T":
+        d, t = captured[:8], captured[9:]
+        return f"{d[:4]}-{d[4:6]}-{d[6:8]} {t[:2]}:{t[2:4]}"
+    return captured
+
+
+def build_view(data_dir: Path) -> list[dict]:
+    """Every bundle in ``data_dir`` as a case dict, newest first."""
+    cases: list[dict] = []
+    for path in sorted(data_dir.glob("*.jsonl")):
+        try:
+            recs = load_bundle(path)
+        except OSError:
+            continue
+        if not recs:
+            continue
+        ann = annotation(recs)
+        msgs = _messages(recs)
+        cwd = ann.get("cwd") or ""
+        cases.append(
+            {
+                "id": path.stem,
+                "file": path.name,
+                "feedback": ann.get("feedback", "").strip(),
+                "capturedAt": _pretty_ts(ann.get("capturedAt", "")),
+                "repo": Path(cwd).name if cwd else "",
+                "cwd": cwd,
+                "git": ann.get("git") or {},
+                "model": _last_model(recs),
+                "messages": msgs,
+                "flagFrom": _flag_from(msgs),
+            }
+        )
+    cases.sort(key=lambda c: c["capturedAt"], reverse=True)
+    return cases
+
+
+def _last_model(recs: list[dict]) -> str:
+    for r in reversed(recs):
+        if r.get("type") == "assistant":
+            m = r.get("message", {}).get("model")
+            if m:
+                return m
+    return ""
+
+
+def render_html(cases: list[dict]) -> str:
+    payload = json.dumps(cases, ensure_ascii=False).replace("</", "<\\/")
+    return _TEMPLATE.replace("/*__DATA__*/", payload)
+
+
+def main() -> int:
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    out = Path(args[0]) if args else DATA_DIR / "viewer.html"
+    cases = build_view(DATA_DIR)
+    if not cases:
+        print(f"no bundles in {DATA_DIR}", file=sys.stderr)
+        return 1
+    out.write_text(render_html(cases), encoding="utf-8")
+    size_mb = out.stat().st_size / 1e6
+    flagged = sum(1 for c in cases if c["flagFrom"] >= 0)
+    print(
+        f"viewer: {len(cases)} cases ({flagged} flagged) → {out.resolve()} "
+        f"({size_mb:.1f} MB)",
+        file=sys.stderr,
+    )
+    if "--no-open" not in sys.argv:
+        webbrowser.open(out.resolve().as_uri())
+    return 0
+
+
+# The HTML is assembled with .replace (not an f-string) so CSS/JS braces stay
+# literal; only the /*__DATA__*/ token is substituted.
+_TEMPLATE = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caught in the act — case file</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Hanken+Grotesk:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#0e1116; --slate:#161b22; --slate-2:#1b212a; --slate-3:#232c37;
+  --line:#2b3540; --paper:#e9e4d8; --muted:#8a94a1; --faint:#5b6573;
+  --amber:#e0a23a; --amber-soft:rgba(224,162,58,.14); --flag:#ff4b3e;
+  --flag-soft:rgba(255,75,62,.12);
+  --mono:"Space Mono",ui-monospace,Menlo,Consolas,monospace;
+  --body:"Hanken Grotesk",ui-sans-serif,system-ui,sans-serif;
+  --sidebar:340px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0; background:var(--ink); color:var(--paper);
+  font-family:var(--body); font-size:15px; line-height:1.55;
+  display:grid; grid-template-columns:var(--sidebar) 1fr; overflow:hidden;
+}
+::selection{background:var(--amber);color:#0b0e12}
+
+/* ---- sidebar : the case index -------------------------------------- */
+#index{
+  background:var(--slate); border-right:1px solid var(--line);
+  display:flex; flex-direction:column; min-height:0;
+}
+.brand{padding:18px 20px 14px; border-bottom:1px solid var(--line)}
+.brand h1{
+  margin:0; font-family:var(--mono); font-weight:700; font-size:15px;
+  letter-spacing:.02em; color:var(--paper);
+}
+.brand h1 .red{color:var(--flag)}
+.brand .sub{
+  font-family:var(--mono); font-size:11px; color:var(--faint);
+  margin-top:4px; letter-spacing:.04em; text-transform:uppercase;
+}
+.search{padding:12px 14px; border-bottom:1px solid var(--line)}
+.search input{
+  width:100%; background:var(--ink); border:1px solid var(--line);
+  color:var(--paper); font-family:var(--mono); font-size:12px;
+  padding:9px 11px; border-radius:6px; outline:none;
+}
+.search input:focus{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber-soft)}
+.search input::placeholder{color:var(--faint)}
+#cases{overflow-y:auto; flex:1; min-height:0; padding:8px}
+.case{
+  display:block; width:100%; text-align:left; cursor:pointer;
+  background:transparent; border:1px solid transparent; border-radius:8px;
+  padding:12px 13px 13px; margin-bottom:4px; color:inherit; position:relative;
+  border-left:2px solid transparent;
+}
+.case:hover{background:var(--slate-2)}
+.case:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
+.case.active{background:var(--slate-2); border-color:var(--line); border-left-color:var(--amber)}
+.case.flagged{border-left-color:var(--flag)}
+.case.flagged.active{border-left-color:var(--flag)}
+.case .meta{
+  display:flex; justify-content:space-between; align-items:baseline; gap:8px;
+  font-family:var(--mono); font-size:10.5px; color:var(--faint);
+  letter-spacing:.03em; margin-bottom:6px;
+}
+.case .repo{color:var(--amber); text-overflow:ellipsis; overflow:hidden; white-space:nowrap}
+.case .complaint{
+  font-family:var(--mono); font-size:12.5px; line-height:1.45; color:var(--paper);
+  display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
+}
+.case .complaint.empty{color:var(--faint); font-style:italic}
+.case .tag{
+  position:absolute; top:11px; right:11px; font-family:var(--mono);
+  font-size:8.5px; font-weight:700; letter-spacing:.12em; color:var(--flag);
+  border:1px solid var(--flag); padding:1px 4px; border-radius:3px; display:none;
+}
+.case.flagged .tag{display:inline-block}
+
+/* ---- reading pane -------------------------------------------------- */
+#stage{display:flex; flex-direction:column; min-height:0; min-width:0}
+#dossier{
+  padding:18px 32px 16px; border-bottom:1px solid var(--line);
+  background:linear-gradient(180deg,var(--slate) 0%,var(--ink) 100%);
+}
+#dossier .row{
+  display:flex; gap:18px; flex-wrap:wrap; font-family:var(--mono);
+  font-size:11px; color:var(--faint); letter-spacing:.04em; margin-bottom:10px;
+}
+#dossier .row b{color:var(--muted); font-weight:400}
+#dossier .row .k{color:var(--amber)}
+#complaint-banner{
+  font-family:var(--mono); font-size:14px; line-height:1.5; color:var(--paper);
+  border-left:3px solid var(--flag); background:var(--flag-soft);
+  padding:11px 16px; border-radius:0 6px 6px 0; white-space:pre-wrap;
+}
+#complaint-banner .label{
+  display:block; font-size:9.5px; font-weight:700; letter-spacing:.16em;
+  color:var(--flag); margin-bottom:5px;
+}
+#chat{overflow-y:auto; flex:1; min-height:0; padding:28px 32px 120px; scroll-behavior:smooth}
+#chat.wide{max-width:none}
+
+/* turns */
+.turn{max-width:880px; margin:0 auto 22px; position:relative}
+.turn .who{
+  font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.14em;
+  text-transform:uppercase; color:var(--faint); margin-bottom:7px;
+}
+.turn.user .who{color:var(--amber)}
+.turn.assistant .who{color:var(--muted)}
+.bubble{
+  border:1px solid var(--line); border-radius:10px; padding:14px 18px;
+  background:var(--slate-2); white-space:pre-wrap; word-wrap:break-word;
+}
+.turn.user .bubble{background:var(--amber-soft); border-color:rgba(224,162,58,.35); border-left:2px solid var(--amber)}
+.turn.assistant .bubble{background:var(--slate-2)}
+.bubble + .bubble{margin-top:8px}
+.turn p{margin:0 0 .7em} .turn p:last-child{margin:0}
+.turn code{font-family:var(--mono); font-size:.86em; background:#0c0f14; padding:.1em .35em; border-radius:4px; color:#f0d39a}
+.turn pre{background:#0b0e12; border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow-x:auto; margin:.6em 0}
+.turn pre code{background:none; padding:0; color:#d6e2ec; font-size:12.5px; line-height:1.5}
+.turn h1,.turn h2,.turn h3{font-family:var(--body); line-height:1.25; margin:.9em 0 .4em}
+.turn h1{font-size:1.3em} .turn h2{font-size:1.15em} .turn h3{font-size:1.02em}
+.turn ul,.turn ol{margin:.4em 0 .7em; padding-left:1.4em}
+.turn a{color:var(--amber)}
+.turn blockquote{border-left:2px solid var(--line); margin:.5em 0; padding-left:12px; color:var(--muted)}
+
+/* thinking + tools : the machine layer, dimmed + foldable */
+details.fold{margin:8px 0; border:1px solid var(--line); border-radius:8px; background:#0c0f14; overflow:hidden}
+details.fold>summary{
+  cursor:pointer; list-style:none; padding:8px 13px; font-family:var(--mono);
+  font-size:10.5px; letter-spacing:.06em; color:var(--faint); display:flex;
+  align-items:center; gap:8px; user-select:none;
+}
+details.fold>summary::-webkit-details-marker{display:none}
+details.fold>summary::before{content:"▸"; color:var(--faint)}
+details.fold[open]>summary::before{content:"▾"}
+details.fold>summary:hover{color:var(--muted)}
+details.fold .body{padding:0 13px 12px; font-family:var(--mono); font-size:12px; line-height:1.5; white-space:pre-wrap; color:var(--muted); border-top:1px solid var(--line); padding-top:11px}
+details.thinking>summary{color:#9c8bbf}
+.toolname{color:var(--amber); font-weight:700}
+.turn.tool{max-width:880px}
+.turn.tool details.fold .body{color:#9fb0c0}
+.interrupt{max-width:880px; margin:0 auto 22px; font-family:var(--mono); font-size:11px; color:var(--flag); text-align:center; letter-spacing:.08em; text-transform:uppercase}
+.interrupt::before,.interrupt::after{content:"———— "} .interrupt::after{content:" ————"}
+
+/* the signature : the flagged exhibit */
+#flag-anchor{max-width:880px; margin:34px auto 18px; display:flex; align-items:center; gap:14px}
+#flag-anchor .line{flex:1; height:1px; background:linear-gradient(90deg,transparent,var(--flag))}
+#flag-anchor .line.r{background:linear-gradient(90deg,var(--flag),transparent)}
+#flag-anchor .stamp{
+  font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.22em;
+  color:var(--flag); border:1.5px solid var(--flag); padding:5px 11px; border-radius:4px;
+  white-space:nowrap; transform:rotate(-1.5deg); box-shadow:0 0 0 4px var(--flag-soft);
+}
+.turn.exhibit .bubble{border-color:var(--flag); border-left:2px solid var(--flag); box-shadow:0 0 0 1px var(--flag-soft)}
+.turn.exhibit .who{color:var(--flag)}
+@keyframes pulse{0%{box-shadow:0 0 0 1px var(--flag-soft)}40%{box-shadow:0 0 0 6px var(--flag-soft)}100%{box-shadow:0 0 0 1px var(--flag-soft)}}
+.turn.exhibit.lit .bubble{animation:pulse 1.4s ease-out 1}
+
+#empty{margin:auto; text-align:center; color:var(--faint); font-family:var(--mono); font-size:13px; padding:40px}
+#empty .big{font-size:42px; color:var(--line); margin-bottom:12px}
+
+/* scrollbars */
+#cases::-webkit-scrollbar,#chat::-webkit-scrollbar{width:10px}
+#cases::-webkit-scrollbar-thumb,#chat::-webkit-scrollbar-thumb{background:var(--slate-3); border-radius:6px; border:2px solid var(--slate)}
+#chat::-webkit-scrollbar-thumb{border-color:var(--ink)}
+
+@media (max-width:820px){
+  body{grid-template-columns:1fr; grid-template-rows:auto 1fr}
+  #index{max-height:42vh}
+}
+@media (prefers-reduced-motion:reduce){
+  #chat{scroll-behavior:auto} .turn.exhibit.lit .bubble{animation:none}
+}
+</style>
+</head>
+<body>
+<nav id="index">
+  <div class="brand">
+    <h1>caught <span class="red">in the act</span></h1>
+    <div class="sub">case file · <span id="count"></span> exhibits</div>
+  </div>
+  <div class="search"><input id="q" type="search" placeholder="filter complaints / repos…" autocomplete="off"></div>
+  <div id="cases" role="listbox" aria-label="Captured cases"></div>
+</nav>
+
+<main id="stage">
+  <header id="dossier" hidden>
+    <div class="row">
+      <span><b><span class="k">case</span> <span id="d-id"></span></b></span>
+      <span><b><span class="k">when</span> <span id="d-when"></span></b></span>
+      <span><b><span class="k">repo</span> <span id="d-repo"></span></b></span>
+      <span><b><span class="k">model</span> <span id="d-model"></span></b></span>
+    </div>
+    <div id="complaint-banner"><span class="label">complaint on file</span><span id="d-feedback"></span></div>
+  </header>
+  <div id="chat"><div id="empty"><div class="big">⚐</div>pick a case from the index<br>to read the transcript</div></div>
+</main>
+
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+const CASES = JSON.parse(document.getElementById('data').textContent);
+const elCases = document.getElementById('cases');
+const elChat  = document.getElementById('chat');
+const elDoss  = document.getElementById('dossier');
+document.getElementById('count').textContent = CASES.length;
+
+const esc = s => (s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+
+// minimal, safe markdown: fenced code, inline code, headings, bold/italic,
+// links, lists, paragraphs. Escapes first, so input can't inject markup.
+function md(src){
+  const lines=esc(src).split('\n');
+  let out=[], list=null, code=null;
+  const closeList=()=>{ if(list){out.push('</'+list+'>'); list=null;} };
+  const inline=t=>t
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g,'$1<em>$2</em>')
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g,'<a href="$2" target="_blank" rel="noopener">$1</a>');
+  for(const raw of lines){
+    if(/^\s*```/.test(raw)){
+      if(code===null){ closeList(); code=[]; }
+      else { out.push('<pre><code>'+code.join('\n')+'</code></pre>'); code=null; }
+      continue;
+    }
+    if(code!==null){ code.push(raw); continue; }
+    let m;
+    if((m=raw.match(/^(#{1,3})\s+(.*)$/))){ closeList(); out.push('<h'+m[1].length+'>'+inline(m[2])+'</h'+m[1].length+'>'); }
+    else if((m=raw.match(/^\s*[-*]\s+(.*)$/))){ if(list!=='ul'){closeList();out.push('<ul>');list='ul';} out.push('<li>'+inline(m[1])+'</li>'); }
+    else if((m=raw.match(/^\s*\d+\.\s+(.*)$/))){ if(list!=='ol'){closeList();out.push('<ol>');list='ol';} out.push('<li>'+inline(m[1])+'</li>'); }
+    else if(raw.trim()===''){ closeList(); }
+    else { closeList(); out.push('<p>'+inline(raw)+'</p>'); }
+  }
+  if(code!==null) out.push('<pre><code>'+code.join('\n')+'</code></pre>');
+  closeList();
+  return out.join('\n');
+}
+
+function fold(cls,label,body,open){
+  return '<details class="fold '+cls+'"'+(open?' open':'')+'><summary>'+label+
+    '</summary><div class="body">'+body+'</div></details>';
+}
+
+function renderTurn(m,exhibit){
+  if(m.role==='interrupt') return '<div class="interrupt">request interrupted by user</div>';
+  if(m.role==='tool'){
+    const body=m.results.map(r=>esc(r)).join('\n\n<span style="color:var(--faint)">— — —</span>\n\n');
+    return '<div class="turn tool">'+fold('','tool result',body,false)+'</div>';
+  }
+  if(m.role==='user'){
+    return '<div class="turn user"><div class="who">you</div><div class="bubble">'+md(m.text)+'</div></div>';
+  }
+  // assistant
+  let inner='';
+  for(const b of m.blocks){
+    if(b.k==='text')      inner+='<div class="bubble">'+md(b.text)+'</div>';
+    else if(b.k==='thinking') inner+=fold('thinking','thinking',esc(b.text),false);
+    else if(b.k==='tool_use') inner+=fold('','<span class="toolname">'+esc(b.name)+'</span>',esc(b.input),false);
+  }
+  return '<div class="turn assistant'+(exhibit?' exhibit':'')+'"><div class="who">'+
+    (exhibit?'claude · flagged':'claude')+'</div>'+inner+'</div>';
+}
+
+let activeBtn=null;
+function open(idx){
+  const c=CASES[idx];
+  if(activeBtn) activeBtn.classList.remove('active');
+  activeBtn=elCases.querySelector('[data-i="'+idx+'"]');
+  if(activeBtn){ activeBtn.classList.add('active'); activeBtn.scrollIntoView({block:'nearest'}); }
+
+  elDoss.hidden=false;
+  document.getElementById('d-id').textContent   = c.id.slice(0,28);
+  document.getElementById('d-when').textContent = c.capturedAt||'—';
+  document.getElementById('d-repo').textContent = c.repo||'—';
+  document.getElementById('d-model').textContent= c.model||'—';
+  const fb=document.getElementById('d-feedback');
+  fb.textContent = c.feedback || '(no feedback recorded)';
+
+  let html='', flagged=false;
+  c.messages.forEach((m,i)=>{
+    if(i===c.flagFrom && c.flagFrom>=0){
+      html+='<div id="flag-anchor"><span class="line"></span><span class="stamp">⚑ FLAGGED EXCHANGE</span><span class="line r"></span></div>';
+      flagged=true;
+    }
+    const exhibit = c.flagFrom>=0 && i>c.flagFrom && m.role==='assistant';
+    html+=renderTurn(m,exhibit);
+  });
+  if(!c.messages.length) html='<div id="empty">this bundle has no readable chat records</div>';
+  elChat.innerHTML=html;
+
+  // scroll to the bottom = to the flagged response, then pulse it once
+  requestAnimationFrame(()=>{
+    elChat.scrollTop=elChat.scrollHeight;
+    const ex=elChat.querySelector('.turn.exhibit');
+    if(ex){ ex.classList.add('lit'); }
+  });
+  location.hash=idx;
+}
+
+function sidebar(filter){
+  const f=(filter||'').toLowerCase();
+  elCases.innerHTML='';
+  CASES.forEach((c,i)=>{
+    if(f && !((c.feedback+' '+c.repo+' '+c.cwd).toLowerCase().includes(f))) return;
+    const b=document.createElement('button');
+    b.className='case'+(c.flagFrom>=0?' flagged':'');
+    b.dataset.i=i; b.setAttribute('role','option');
+    const fb=c.feedback?esc(c.feedback):'(no feedback recorded)';
+    b.innerHTML=
+      '<span class="tag">⚑ flag</span>'+
+      '<div class="meta"><span class="repo">'+esc(c.repo||'—')+'</span><span>'+esc(c.capturedAt)+'</span></div>'+
+      '<div class="complaint'+(c.feedback?'':' empty')+'">'+fb+'</div>';
+    b.addEventListener('click',()=>open(i));
+    elCases.appendChild(b);
+  });
+}
+
+function move(d){
+  const vis=[...elCases.querySelectorAll('.case')];
+  if(!vis.length) return;
+  let pos=activeBtn?vis.indexOf(activeBtn):-1;
+  pos=Math.max(0,Math.min(vis.length-1,pos+d));
+  vis[pos].click(); vis[pos].focus();
+}
+document.addEventListener('keydown',e=>{
+  if(e.target.id==='q') return;
+  if(e.key==='j'||e.key==='ArrowDown'){e.preventDefault();move(1);}
+  if(e.key==='k'||e.key==='ArrowUp'){e.preventDefault();move(-1);}
+  if(e.key==='/'){e.preventDefault();document.getElementById('q').focus();}
+});
+document.getElementById('q').addEventListener('input',e=>sidebar(e.target.value));
+
+sidebar('');
+const start = Number(location.hash.slice(1));
+if(CASES.length) open(Number.isInteger(start)&&start>=0&&start<CASES.length?start:0);
+</script>
+</body>
+</html>
+"""
