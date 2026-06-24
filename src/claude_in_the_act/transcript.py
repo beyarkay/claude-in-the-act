@@ -10,6 +10,11 @@ from pathlib import Path
 # The record type we append to a captured bundle (the feedback/good/bad triple).
 ANNOTATION_TYPE = "bad_annotation"
 
+# The record type we append when a judge scores a bundle — kept with the
+# transcript it judged so verdicts are viewable later. Append-only: re-running
+# the eval accumulates these (latest last), it never overwrites a prior verdict.
+JUDGE_RESULT_TYPE = "judge_result"
+
 # Prepopulated value of the bad_annotation `goodResponse` field. Replace it (in
 # the bundle jsonl's last line) with the response you actually wanted; the judge
 # treats it as "no ideal response" until you do.
@@ -42,6 +47,38 @@ def dump_jsonl(recs: list[dict]) -> str:
 def annotation(recs: list[dict]) -> dict:
     """The bundle's bad_annotation record (last one wins), or {} if absent."""
     return next((r for r in reversed(recs) if r.get("type") == ANNOTATION_TYPE), {})
+
+
+def judge_results(recs: list[dict]) -> list[dict]:
+    """All judge_result records in a bundle, oldest first (re-runs accumulate)."""
+    return [r for r in recs if r.get("type") == JUDGE_RESULT_TYPE]
+
+
+def append_judgement(
+    path: str | Path, result: dict, *, mode: str, judge_model: str, judged_at: str
+) -> dict:
+    """Append a ``judge_result`` record to a bundle jsonl and return it.
+
+    Keeps a run's verdict with the transcript it judged. ``result`` is what a
+    ``judge_bundle*`` returns; we store the durable fields (not the bulky prompt/
+    response text, which already lives in the bundle). Caller supplies ``judged_at``
+    so a batch run can stamp every record with one consistent timestamp.
+    """
+    record = {
+        "type": JUDGE_RESULT_TYPE,
+        "mode": mode,
+        "score": result.get("score"),
+        "rationale": result.get("rationale"),
+        "judgeModel": judge_model,
+        "judgedModel": result.get("judgedModel"),
+        "hadGoodResponse": result.get("hadGoodResponse"),
+        "judgedAt": judged_at,
+        "judgeCost": result.get("judgeCost") or {},
+    }
+    path = Path(path)
+    with path.open("a") as f:
+        f.write(json.dumps(record) + "\n")
+    return record
 
 
 def denumber(rendered: str) -> str:

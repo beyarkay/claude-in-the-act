@@ -4,9 +4,14 @@
 
 from __future__ import annotations
 
+import json
+
 from claude_in_the_act.transcript import (
+    append_judgement,
     bundle_metrics,
     final_response,
+    judge_results,
+    load_bundle,
     split_transcript,
     user_text,
 )
@@ -173,3 +178,27 @@ def test_bundle_metrics_span_and_no_prompt():
     assert m["userPrompts"] == 0
     assert m["sessionSpanMinutes"] == 30
     assert m["flaggedResponseChars"] == 0  # no real prompt -> no flagged response
+
+
+def test_append_judgement_round_trips(tmp_path):
+    """A verdict appended to a bundle reads back as a judge_result, and re-runs
+    accumulate (append-only) rather than overwriting."""
+    p = tmp_path / "b.jsonl"
+    p.write_text(json.dumps({"type": "bad_annotation", "feedback": "x"}) + "\n")
+    rec = append_judgement(
+        p,
+        {"score": 2, "rationale": "bad", "judgedModel": "claude-opus-4-8"},
+        mode="existing",
+        judge_model="claude-sonnet-4-6",
+        judged_at="20260624T120000",
+    )
+    assert rec["judgedAt"] == "20260624T120000"
+
+    append_judgement(
+        p, {"score": 7}, mode="regen", judge_model="m", judged_at="20260624T130000"
+    )
+    jr = judge_results(load_bundle(p))
+    assert [r["score"] for r in jr] == [2, 7]  # oldest first, both kept
+    assert jr[0]["mode"] == "existing"
+    assert jr[0]["judgeModel"] == "claude-sonnet-4-6"
+    assert jr[0]["judgedModel"] == "claude-opus-4-8"

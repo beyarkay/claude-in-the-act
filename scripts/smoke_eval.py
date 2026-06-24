@@ -1,24 +1,28 @@
 #!/usr/bin/env python3
-"""Smoke-test the eval on a cheap subset, watching cost + reproducibility.
+"""Run the eval over a chosen set of bundles, watching cost + reproducibility.
 
-The full eval re-loads each captured session and replays it against the model
-(``recreate``/``recreate_with_tools``) before judging — re-sending the whole
-pre-prompt context as input tokens, so cost scales with transcript size, which
-spans ~1000x across the dataset. This runner deliberately samples the *cheap*
-end so we can (a) confirm the pipeline works end-to-end, (b) measure real $ per
-replay, and (c) see how often a session fails to reproduce — then extrapolate
-the full-run cost from each bundle's stored ``transcriptBytes`` without paying
-to replay the multi-million-token ones.
+Two modes:
+  --mode existing  judge the already-captured bad response directly (cheap; one
+                   judge call, no replay). The calibration pass.
+  --mode regen     regenerate the response then judge the improvement (expensive;
+                   reconstructs the repo and replays the turn).
+
+``--save`` appends each verdict to its bundle .jsonl (a ``judge_result`` record)
+and writes a combined results file, so the run is viewable later.
+
+A note on size: ``transcript_tokens`` is the whole appended session *log* (bytes
+/ 4 ≈ tokens of every turn + tool result ever logged), NOT a live context window
+— Claude Code caps and compacts context at ~1M, so a replay never actually sends
+a multi-million-token prompt. We use the log size only to pick cheap bundles and
+to rough-extrapolate the regen-mode bill.
 
 Usage:
-    python3 scripts/smoke_eval.py                # 5 smallest bundles
-    python3 scripts/smoke_eval.py --smallest 3   # N smallest
-    python3 scripts/smoke_eval.py --max-ktok 250 # all under ~250k approx-tokens
-    python3 scripts/smoke_eval.py FILE [FILE...] # explicit bundle(s)
-    python3 scripts/smoke_eval.py --model claude-sonnet-4-6 --smallest 5
-
-The replay model defaults to whatever produced each captured response (so this
-scores the *existing* responses' own model); override with --model.
+    python3 scripts/smoke_eval.py                       # 5 smallest, judge-only
+    python3 scripts/smoke_eval.py --smallest 41 --save  # judge all, persist
+    python3 scripts/smoke_eval.py --workers 24          # 24-way parallel judges
+    python3 scripts/smoke_eval.py --max-ktok 250        # all under ~250k log-tok
+    python3 scripts/smoke_eval.py FILE [FILE...]        # explicit bundle(s)
+    python3 scripts/smoke_eval.py --mode regen --model claude-sonnet-4-6
 """
 
 from __future__ import annotations
@@ -26,14 +30,22 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from claude_in_the_act import DATA_DIR, evaluate, judge
+from claude_in_the_act.transcript import append_judgement
+
+# A live context window can't exceed ~1M tokens (and Claude Code compacts well
+# before that), so a regen replay never sends a whole multi-MB log — cap each
+# bundle here when estimating replay input, or the bill is wildly overstated.
+CONTEXT_CAP = 1_000_000
 
 
-def approx_tokens(bundle: Path) -> int:
-    """Cheap size proxy: stored transcriptBytes / 4, falling back to file size.
-    Reads only the file tail (the bad_annotation is the last line)."""
+def transcript_tokens(bundle: Path) -> int:
+    """Tokens-equivalent of the whole session *log* (stored transcriptBytes / 4,
+    falling back to file size) — a size proxy, not a live context window. Reads
+    only the file tail (the bad_annotation is the last line)."""
     size = bundle.stat().st_size
     with bundle.open("rb") as f:
         f.seek(max(0, size - 300_000))
@@ -81,9 +93,9 @@ def select(args: argparse.Namespace) -> list[Path]:
             p = Path(b)
             out.append(p if p.exists() else DATA_DIR / b)
         return out
-    pool = sorted(DATA_DIR.glob("*.jsonl"), key=approx_tokens)
+    pool = sorted(DATA_DIR.glob("*.jsonl"), key=transcript_tokens)
     if args.max_ktok is not None:
-        pool = [p for p in pool if approx_tokens(p) <= args.max_ktok * 1000]
+        pool = [p for p in pool if transcript_tokens(p) <= args.max_ktok * 1000]
     return pool[: args.smallest]
 
 
@@ -104,7 +116,9 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("bundles", nargs="*", help="explicit bundle paths/names")
     ap.add_argument("--smallest", type=int, default=5, help="N smallest bundles")
-    ap.add_argument("--max-ktok", type=int, default=None, help="cap approx-tokens (k)")
+    ap.add_argument(
+        "--max-ktok", type=int, default=None, help="cap log size (k tok-equiv)"
+    )
     ap.add_argument(
         "--mode",
         choices=("existing", "regen"),
@@ -114,6 +128,12 @@ def main() -> int:
     )
     ap.add_argument("--model", default=None, help="replay model (regen mode only)")
     ap.add_argument("--judge-model", default=None, help="override the judge model")
+    ap.add_argument("--workers", type=int, default=8, help="parallel judge calls")
+    ap.add_argument(
+        "--save",
+        action="store_true",
+        help="append each verdict to its bundle .jsonl + write a combined report",
+    )
     args = ap.parse_args()
 
     bundles = select(args)
@@ -136,8 +156,11 @@ def main() -> int:
         file=sys.stderr,
     )
     for b in bundles:
-        print(f"  · {b.name}  (~{approx_tokens(b) / 1000:.0f}k tok)", file=sys.stderr)
-    print("", file=sys.stderr)
+        print(
+            f"  · {b.name}  (~{transcript_tokens(b) / 1000:.0f}k tok-log)",
+            file=sys.stderr,
+        )
+    print(f"\nparallelism: {args.workers} · save: {args.save}\n", file=sys.stderr)
 
     def progress(done: int, n: int, r: dict) -> None:
         cost = _usd(r.get("regenCost")) + _usd(r.get("judgeCost"))
@@ -152,16 +175,46 @@ def main() -> int:
         [str(b) for b in bundles],
         args.model,
         judge_model=judge_model,
-        max_workers=4,
+        max_workers=args.workers,
         on_done=progress,
         scorer=scorer,
     )
+
+    # Persist each verdict back into its bundle (+ a combined report) so the run
+    # is viewable later. One timestamp for the whole batch.
+    if args.save:
+        stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
+        saved = 0
+        for r, b in zip(results, bundles):
+            if isinstance(r.get("score"), int):  # don't persist failed judge calls
+                append_judgement(
+                    b, r, mode=args.mode, judge_model=judge_model, judged_at=stamp
+                )
+                saved += 1
+        report = DATA_DIR / f"eval-{args.mode}-{stamp}.json"
+        report.write_text(
+            json.dumps(
+                {
+                    "mode": args.mode,
+                    "judgeModel": judge_model,
+                    "judgedAt": stamp,
+                    "results": results,
+                },
+                indent=2,
+                default=str,
+            )
+            + "\n"
+        )
+        print(
+            f"\nsaved {saved} verdict(s) into bundles + report {report}",
+            file=sys.stderr,
+        )
 
     # --- aggregate ----------------------------------------------------------
     outcomes: dict[str, int] = {}
     total_cost = 0.0
     total_in = total_out = 0
-    approx_used = 0
+    replay_tok_used = 0  # log size capped at the context window (regen estimate)
     for r, b in zip(results, bundles):
         outcomes[classify(r)] = outcomes.get(classify(r), 0) + 1
         for c in (r.get("regenCost") or {}, r.get("judgeCost") or {}):
@@ -174,7 +227,7 @@ def main() -> int:
                 + int(c.get("cacheReadTokens") or 0)
             )
             total_out += int(c.get("outputTokens") or 0)
-        approx_used += approx_tokens(b)
+        replay_tok_used += min(transcript_tokens(b), CONTEXT_CAP)
 
     n = len(results)
     ok = outcomes.get("ok", 0)
@@ -212,19 +265,20 @@ def main() -> int:
     all_bundles = sorted(DATA_DIR.glob("*.jsonl"))
     if total_cost > 0 and ok:
         print("-" * 72)
-        if args.mode == "regen" and approx_used > 0:
-            all_ktok = sum(approx_tokens(b) for b in all_bundles) / 1000
-            rate = total_cost / (approx_used / 1e6)  # $ per million approx-tokens
+        if args.mode == "regen" and replay_tok_used > 0:
+            all_tok = sum(min(transcript_tokens(b), CONTEXT_CAP) for b in all_bundles)
+            rate = total_cost / (replay_tok_used / 1e6)  # $ per million replay-tokens
             print(
-                f"measured rate: ${rate:.2f} per million approx-tokens (replay+judge)"
+                f"measured rate: ${rate:.2f} per million replay input-tokens "
+                f"(each bundle capped at ~{CONTEXT_CAP // 1_000_000}M — context compacts)"
             )
             print(
                 f"EXTRAPOLATED full run of all {len(all_bundles)} bundles "
-                f"(~{all_ktok / 1000:.1f}M approx-tokens): ~${rate * all_ktok / 1000:.0f}"
+                f"(~{all_tok / 1e6:.1f}M capped replay-tokens): ~${rate * all_tok / 1e6:.0f}"
             )
             print(
-                "  (rough: ignores per-turn context resends, prompt caching, and "
-                "output-token variance — treat as an order-of-magnitude floor)"
+                "  (rough: caps each bundle's log at the context window, then "
+                "ignores prompt caching + output-token variance)"
             )
         else:  # existing mode: cost is ~flat per bundle (input is just the reply)
             per = total_cost / ok
