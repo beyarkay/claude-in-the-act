@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from claude_in_the_act import judge
@@ -48,3 +50,74 @@ def test_parse_json_embedded_in_prose():
 def test_parse_json_raises_when_no_object():
     with pytest.raises(ValueError):
         judge._parse_json_obj("no json here at all")
+
+
+def test_build_score_prompt_scores_the_response_alone():
+    p = judge.build_score_prompt(
+        feedback="too verbose",
+        user_prompt="summarise this",
+        bad="here is a very long summary",
+        good=None,
+    )
+    assert "<response>\nhere is a very long summary\n</response>" in p
+    assert "<user-feedback>\ntoo verbose\n</user-feedback>" in p
+    assert "<new-response>" not in p  # nothing regenerated to compare against
+    assert "<ideal-response>\n" not in p  # only the instruction mentions the tag
+    assert "0 = the complaint is fully justified" in p
+
+
+def test_build_score_prompt_includes_ideal_when_present():
+    p = judge.build_score_prompt("fb", "prompt", "the reply", "THE IDEAL ANSWER")
+    assert "<ideal-response>\nTHE IDEAL ANSWER\n</ideal-response>" in p
+
+
+def test_judge_bundle_existing_judges_stored_response_without_replay(
+    tmp_path, monkeypatch
+):
+    """It must pull the stored badResponse + feedback + prompt straight from the
+    bundle and hand them to the judge — never regenerate."""
+    recs = [
+        {"type": "user", "message": {"role": "user", "content": "do X"}},
+        {
+            "type": "assistant",
+            "message": {
+                "role": "assistant",
+                "model": "claude-opus-4-8",
+                "content": [{"type": "text", "text": "the bad answer"}],
+            },
+        },
+        {
+            "type": "bad_annotation",
+            "feedback": "too verbose",
+            "badResponse": "the bad answer",
+            "goodResponse": judge.GOOD_RESPONSE_PLACEHOLDER,
+        },
+    ]
+    bundle = tmp_path / "b.jsonl"
+    bundle.write_text("".join(json.dumps(r) + "\n" for r in recs))
+
+    seen = {}
+
+    def fake_score(feedback, user_prompt, bad, good=None, judge_model=None):
+        seen.update(feedback=feedback, user_prompt=user_prompt, bad=bad, good=good)
+        return {"score": 2, "rationale": "agrees it's bad", "cost": {"costUsd": 0.001}}
+
+    # replaying would call recreate; assert it never happens
+    monkeypatch.setattr(judge, "score_existing", fake_score)
+    monkeypatch.setattr(
+        judge.recreate,
+        "recreate_with_tools",
+        lambda *a, **k: pytest.fail("must not regenerate"),
+    )
+
+    out = judge.judge_bundle_existing(bundle)
+    assert seen == {
+        "feedback": "too verbose",
+        "user_prompt": "do X",
+        "bad": "the bad answer",
+        "good": None,  # placeholder collapses to None
+    }
+    assert out["score"] == 2
+    assert out["judgedModel"] == "claude-opus-4-8"
+    assert out["hadGoodResponse"] is False
+    assert out["judgeCost"] == {"costUsd": 0.001}

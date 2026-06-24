@@ -18,9 +18,9 @@ from claude_in_the_act import DATA_DIR, judge
 from claude_in_the_act.judge import DEFAULT_JUDGE_MODEL
 
 
-def _judge_one(bundle: str, regen_model: str | None, judge_model: str) -> dict:
+def _judge_one(bundle: str, regen_model: str | None, judge_model: str, scorer) -> dict:
     try:
-        return judge.judge_bundle(bundle, regen_model, judge_model)
+        return scorer(bundle, regen_model, judge_model)
     except Exception as e:  # one bad bundle shouldn't sink the whole run
         return {
             "bundle": Path(bundle).name,
@@ -37,12 +37,20 @@ def run_eval(
     judge_model: str = DEFAULT_JUDGE_MODEL,
     max_workers: int = 4,
     on_done=None,
+    scorer=None,
 ) -> list[dict]:
-    """Judge every bundle concurrently; results keep the input order."""
+    """Judge every bundle concurrently; results keep the input order.
+
+    ``scorer`` picks the eval mode: it defaults to the regenerate-then-judge
+    ``judge.judge_bundle``; pass ``judge.judge_bundle_existing`` for the cheap
+    judge-the-stored-response pass. Resolved here (not as a default arg) so the
+    tests' ``monkeypatch`` of ``judge.judge_bundle`` still takes effect.
+    """
+    scorer = scorer or judge.judge_bundle
     results: list[dict | None] = [None] * len(bundles)
     with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
         futs = {
-            ex.submit(_judge_one, b, regen_model, judge_model): i
+            ex.submit(_judge_one, b, regen_model, judge_model, scorer): i
             for i, b in enumerate(bundles)
         }
         done = 0
@@ -53,6 +61,23 @@ def run_eval(
             if on_done:
                 on_done(done, len(bundles), results[i])
     return results  # type: ignore[return-value]
+
+
+def _cost_summary(results: list[dict]) -> str | None:
+    """Total $ spend (replay + judge calls) across results, or None if no result
+    carried cost data (e.g. an older run, or a fully-mocked report)."""
+    total = 0.0
+    seen = False
+    for r in results:
+        for key in ("regenCost", "judgeCost"):
+            usd = (r.get(key) or {}).get("costUsd")
+            if isinstance(usd, (int, float)):
+                total += usd
+                seen = True
+    if not seen:
+        return None
+    n = len(results) or 1
+    return f"## Cost: ${total:.2f} total · ${total / n:.3f}/transcript avg"
 
 
 def format_report(
@@ -69,9 +94,10 @@ def format_report(
         f"## Overall: avg {avg:.1f}/10 · min {lo} · max {hi} · "
         f"{len(vals)} scored, {errors} error(s), {len(results)} total",
         "",
-        "## Per-transcript (worst first)",
-        "",
     ]
+    if (cost := _cost_summary(results)) is not None:
+        out += [cost, ""]
+    out += ["## Per-transcript (worst first)", ""]
     for r in sorted(
         results, key=lambda r: (r.get("score") is None, r.get("score") or 0)
     ):

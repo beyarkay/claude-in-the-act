@@ -23,7 +23,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from claude_in_the_act.harness import WORKTREE_LOCK, git, run_claude
+from claude_in_the_act.harness import WORKTREE_LOCK, claude_meta, git, run_claude
 from claude_in_the_act.transcript import (
     ANNOTATION_TYPE,
     annotation as bundle_annotation,
@@ -340,6 +340,7 @@ def recreate_with_tools(stored: Path, model_override: str | None = None) -> dict
             "preTurnExact": undo["preTurnExact"],
             "undone": undo["undone"],
             "bashMutations": undo["bashMutations"],
+            "cost": claude_meta(proc),
         }
     finally:
         if planted is not None:
@@ -373,7 +374,7 @@ def recreate(stored: Path, model_override: str | None = None) -> dict[str, str]:
 
     tools = None if os.environ.get("ALLOW_TOOLS", "0") == "1" else []
     try:
-        recreated, _ = run_claude(
+        recreated, proc = run_claude(
             prompt, model=model, tools=tools, cwd=replay_dir, resume=new_id, fork=True
         )
     finally:
@@ -389,4 +390,6 @@ def recreate(stored: Path, model_override: str | None = None) -> dict[str, str]:
         "prompt": prompt,
         "original": original,
         "recreated": recreated,
+        "returncode": proc.returncode,
+        "cost": claude_meta(proc),
     }

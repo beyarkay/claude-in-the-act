@@ -84,3 +84,31 @@ def run_claude(
         except json.JSONDecodeError:
             pass
     return result, proc
+
+
+def claude_meta(proc: subprocess.CompletedProcess) -> dict:
+    """Cost/usage metadata from a ``claude -p --output-format json`` run.
+
+    Pulls the fields worth tracking across an eval — dollar cost, token usage,
+    turn count, wall time — out of the same result JSON ``run_claude`` reads for
+    ``.result``. Returns ``{}`` when the output isn't the expected JSON (timeout,
+    non-zero exit, plain-text error), so a failed call contributes no spurious
+    cost. Re-parsing here (rather than threading the dict out of ``run_claude``)
+    keeps that function's two-value signature — and its callers — untouched.
+    """
+    if proc.returncode != 0 or not (proc.stdout or "").strip():
+        return {}
+    try:
+        obj = json.loads(proc.stdout)
+    except json.JSONDecodeError:
+        return {}
+    usage = obj.get("usage") or {}
+    return {
+        "costUsd": obj.get("total_cost_usd"),
+        "numTurns": obj.get("num_turns"),
+        "durationMs": obj.get("duration_ms"),
+        "inputTokens": usage.get("input_tokens"),
+        "outputTokens": usage.get("output_tokens"),
+        "cacheReadTokens": usage.get("cache_read_input_tokens"),
+        "cacheCreationTokens": usage.get("cache_creation_input_tokens"),
+    }

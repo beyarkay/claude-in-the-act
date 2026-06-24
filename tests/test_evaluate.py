@@ -64,3 +64,27 @@ def test_run_eval_captures_per_bundle_errors(monkeypatch):
     res = evaluate.run_eval(["a.jsonl"], None, max_workers=1)
     assert res[0]["score"] is None
     assert "ERROR" in res[0]["rationale"]
+
+
+def test_run_eval_uses_custom_scorer():
+    """The cheap judge-only mode is wired in by passing scorer=; run_eval must
+    call it instead of the default judge_bundle."""
+    calls = []
+
+    def scorer(bundle, regen_model, judge_model):
+        calls.append(bundle)
+        return {"bundle": bundle, "feedback": "f", "score": 3, "rationale": "r"}
+
+    res = evaluate.run_eval(["a.jsonl", "b.jsonl"], None, max_workers=2, scorer=scorer)
+    assert sorted(calls) == ["a.jsonl", "b.jsonl"]
+    assert all(r["score"] == 3 for r in res)
+
+
+def test_cost_summary_sums_replay_and_judge():
+    results = [
+        {"score": 5, "regenCost": {"costUsd": 0.10}, "judgeCost": {"costUsd": 0.02}},
+        {"score": 3, "judgeCost": {"costUsd": 0.03}},  # existing-mode row (no replay)
+    ]
+    assert "$0.15 total" in evaluate._cost_summary(results)
+    # results without any cost data (older runs / mocks) yield no cost line
+    assert evaluate._cost_summary([{"score": 1}]) is None
