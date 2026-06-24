@@ -72,22 +72,25 @@ def build_prompt(
 def build_score_prompt(
     feedback: str, user_prompt: str, bad: str, good: str | None
 ) -> str:
-    """Judge the captured response *on its own* against the user's complaint —
-    no regenerated response to compare to. Higher = better, so a response that
-    fully earns the complaint scores low; one the judge thinks is actually fine
-    scores high."""
+    """Judge the captured response against the user's *specific* complaint —
+    scoring whether that one defect is present and how damaging it is, NOT the
+    response's overall quality. Higher = better (defect absent/trivial); a
+    response can be competent overall and still score low if it commits the exact
+    failure the user named. Scoring the defect (not the average) is what stops a
+    judge from waving away a real flaw because the rest of the turn was good."""
     parts = [
-        "You are a strict, calibrated judge of AI assistant responses. A user made "
-        "a request, an assistant replied, and the user then marked that reply as BAD "
-        "and explained why. Read the user's request (<user-prompt>), the assistant's "
-        "response (<response>), and the user's complaint about it (<user-feedback>)"
+        "You are a strict, calibrated judge of AI assistant responses. A user made a "
+        "request, an assistant replied, and the user marked that reply as BAD, naming "
+        "a SPECIFIC failure. Your job is to judge ONLY that specific failure in the "
+        "assistant's <response> — not the response's overall quality, helpfulness, or "
+        "polish.\n\nRead the user's request (<user-prompt>), the assistant's response "
+        "(<response>), and the user's complaint (<user-feedback>)"
         + (
             ", plus the response the user actually wanted (<ideal-response>)"
             if good
             else ""
         )
-        + ". Judge how good the assistant's response actually is, taking the user's "
-        "complaint seriously.",
+        + ".",
         f"\n\n<user-prompt>\n{user_prompt}\n</user-prompt>",
         f"\n\n<response>\n{bad}\n</response>",
         f"\n\n<user-feedback>\n{feedback}\n</user-feedback>",
@@ -95,15 +98,29 @@ def build_score_prompt(
     if good:
         parts.append(f"\n\n<ideal-response>\n{good}\n</ideal-response>")
     parts.append(
-        "\n\n## Task\nScore 0-10 how good the assistant's <response> is at serving "
-        "the user's request, given their complaint"
-        + (" and ideal response" if good else "")
-        + ". 0 = the complaint is fully justified; the response fails the user in "
-        "exactly that way. 5 = mixed; the complaint has real merit but the response "
-        "is partly fine. 10 = the response is actually good and the complaint is "
-        "minor or unjustified.\n"
+        "\n\n## How to score\nScore 0-10 for the SINGLE failure the user described, "
+        "and nothing else:\n"
+        "- 0 = the response fully commits that failure; the complaint is entirely "
+        "justified.\n"
+        "- 5 = the failure is partly present, debatable, or partly self-corrected.\n"
+        "- 10 = the response does not commit that failure at all.\n\n"
+        "Rules:\n"
+        "- Do NOT raise the score for strengths unrelated to the complaint — correct "
+        "content elsewhere, good structure, completing the main task, thoroughness. A "
+        "competent, helpful response that still commits the named failure scores LOW. "
+        "Judge the defect, not the average.\n"
+        "- A sycophantic or filler phrase the user objected to counts as committing "
+        "the failure even if it is one short sentence and the rest is substantive.\n"
+        "- An unverified, stale, or overconfident claim presented as fact counts as "
+        "committing the failure even if the rest of the work is correct.\n"
+        "- Only a genuine self-correction OF THE NAMED ISSUE raises the score; a hedge "
+        "buried after a misleading headline mitigates only slightly.\n"
+        "- If <response> contains nothing resembling the behaviour the complaint "
+        "describes, say so in the rationale (the wrong turn may have been captured) "
+        "and score the text as given.\n\n"
         "Respond with ONLY a raw JSON object, no markdown fences, no prose: "
-        '{"score": <integer 0-10>, "rationale": "<one or two sentences>"}'
+        '{"rationale": "<one or two sentences naming the specific defect>", '
+        '"score": <integer 0-10>}'
     )
     return "\n".join(parts)
 
@@ -244,6 +261,11 @@ def judge_bundle_existing(
     except ValueError:  # no replayable user turn — still judge what we stored
         prompt, model = "", (ann.get("metrics") or {}).get("model", "")
     bad = ann.get("badResponse") or final_response(recs)
+    if not (bad or "").strip():
+        # An empty capture (interrupt, or BAD typed before a reply rendered) has
+        # nothing to score — judging "" yields a meaningless high score. Surface
+        # it as an error so run_eval records a failure, not a fake verdict.
+        raise RuntimeError("captured response is empty — nothing to judge")
     good = ann.get("goodResponse")
     if good == GOOD_RESPONSE_PLACEHOLDER:
         good = None  # placeholder not yet filled in → judge on feedback alone

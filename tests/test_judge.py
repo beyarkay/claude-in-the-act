@@ -63,7 +63,9 @@ def test_build_score_prompt_scores_the_response_alone():
     assert "<user-feedback>\ntoo verbose\n</user-feedback>" in p
     assert "<new-response>" not in p  # nothing regenerated to compare against
     assert "<ideal-response>\n" not in p  # only the instruction mentions the tag
-    assert "0 = the complaint is fully justified" in p
+    # the rubric scores the named defect, not overall quality
+    assert "Judge the defect, not the average." in p
+    assert "0 = the response fully commits that failure" in p
 
 
 def test_build_score_prompt_includes_ideal_when_present():
@@ -121,3 +123,19 @@ def test_judge_bundle_existing_judges_stored_response_without_replay(
     assert out["judgedModel"] == "claude-opus-4-8"
     assert out["hadGoodResponse"] is False
     assert out["judgeCost"] == {"costUsd": 0.001}
+
+
+def test_judge_bundle_existing_refuses_empty_response(tmp_path, monkeypatch):
+    """An empty captured response must raise, not be judged — judging "" yields a
+    meaningless high score."""
+    recs = [
+        {"type": "user", "message": {"role": "user", "content": "do X"}},
+        {"type": "bad_annotation", "feedback": "bad", "badResponse": ""},
+    ]
+    bundle = tmp_path / "b.jsonl"
+    bundle.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    monkeypatch.setattr(
+        judge, "score_existing", lambda *a, **k: pytest.fail("must not judge empty")
+    )
+    with pytest.raises(RuntimeError, match="empty"):
+        judge.judge_bundle_existing(bundle)

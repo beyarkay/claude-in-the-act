@@ -70,8 +70,8 @@ def classify(r: dict) -> str:
     rationale = (r.get("rationale") or "").lower()
     if isinstance(score, int):
         return "ok"
-    if "produced no output" in rationale:
-        return "regen-empty"
+    if "produced no output" in rationale or "nothing to judge" in rationale:
+        return "empty-response"
     if "could not reconstruct" in rationale:
         return "reconstruct-fail"
     if "unparseable judge" in rationale:
