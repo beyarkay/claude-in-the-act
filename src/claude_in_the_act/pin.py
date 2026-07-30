@@ -20,13 +20,14 @@ pinned and what is at risk; ``cita-pin --unpin`` removes them again.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 from claude_in_the_act import DATA_DIR
 from claude_in_the_act.harness import git, git_out
 from claude_in_the_act.recreate import local_repo_with_sha
-from claude_in_the_act.transcript import annotation, load_bundle
+from claude_in_the_act.transcript import annotation
 
 REF_PREFIX = "refs/cita"
 
@@ -42,12 +43,6 @@ def _tail_annotation(bundle: Path) -> dict:
     lines = tail.splitlines()
     if size > 400_000 and lines:
         lines = lines[1:]  # first line is probably truncated mid-record
-    return annotation(load_bundle_lines(lines))
-
-
-def load_bundle_lines(lines: list[str]) -> list[dict]:
-    import json
-
     recs = []
     for line in lines:
         if not line.strip():
@@ -56,7 +51,7 @@ def load_bundle_lines(lines: list[str]) -> list[dict]:
             recs.append(json.loads(line))
         except json.JSONDecodeError:
             continue
-    return recs
+    return annotation(recs)
 
 
 def capture_ref(bundle: Path) -> str:
