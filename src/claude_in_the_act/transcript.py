@@ -55,22 +55,32 @@ def judge_results(recs: list[dict]) -> list[dict]:
 
 
 def append_judgement(
-    path: str | Path, result: dict, *, mode: str, judge_model: str, judged_at: str
+    path: str | Path,
+    result: dict,
+    *,
+    mode: str,
+    judge_model: str,
+    judged_at: str,
+    rubric: str,
 ) -> dict:
     """Append a ``judge_result`` record to a bundle jsonl and return it.
 
     Keeps a run's verdict with the transcript it judged. ``result`` is what a
-    ``judge_bundle*`` returns; we store the durable fields (not the bulky prompt/
+    ``judge_bundle_*`` returns; we store the durable fields (not the bulky prompt/
     response text, which already lives in the bundle). Caller supplies ``judged_at``
-    so a batch run can stamp every record with one consistent timestamp.
+    so a batch run can stamp every record with one consistent timestamp, and
+    ``rubric`` so scores from an older, differently-scaled judge are never
+    silently compared against current ones.
     """
     record = {
         "type": JUDGE_RESULT_TYPE,
         "mode": mode,
+        "rubric": rubric,
         "score": result.get("score"),
         "rationale": result.get("rationale"),
         "judgeModel": judge_model,
         "judgedModel": result.get("judgedModel"),
+        "baselineScore": result.get("baselineScore"),
         "hadGoodResponse": result.get("hadGoodResponse"),
         "judgedAt": judged_at,
         "judgeCost": result.get("judgeCost") or {},

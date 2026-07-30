@@ -50,7 +50,7 @@ def test_run_eval_runs_all_in_order(monkeypatch):
             "rationale": "r",
         }
 
-    monkeypatch.setattr(judge, "judge_bundle", fake)
+    monkeypatch.setattr(judge, "judge_bundle_stored", fake)
     res = evaluate.run_eval(["x/a.jsonl", "y/b.jsonl", "z/c.jsonl"], "m", max_workers=3)
     assert [r["bundle"] for r in res] == ["a.jsonl", "b.jsonl", "c.jsonl"]
     assert all(r["score"] == 5 for r in res)
@@ -60,7 +60,7 @@ def test_run_eval_captures_per_bundle_errors(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("nope")
 
-    monkeypatch.setattr(judge, "judge_bundle", boom)
+    monkeypatch.setattr(judge, "judge_bundle_stored", boom)
     res = evaluate.run_eval(["a.jsonl"], None, max_workers=1)
     assert res[0]["score"] is None
     assert "ERROR" in res[0]["rationale"]

@@ -2,10 +2,11 @@
 """Run the eval over a chosen set of bundles, watching cost + reproducibility.
 
 Two modes:
-  --mode existing  judge the already-captured bad response directly (cheap; one
-                   judge call, no replay). The calibration pass.
-  --mode regen     regenerate the response then judge the improvement (expensive;
-                   reconstructs the repo and replays the turn).
+  --mode stored    judge the already-captured response directly (cheap; one
+                   judge call, no replay). The baseline pass.
+  --mode regen     replay the turn under the current harness, then judge the new
+                   response on the SAME blind rubric (expensive; reconstructs
+                   the repo). Subtract the two for the before/after.
 
 ``--save`` appends each verdict to its bundle .jsonl (a ``judge_result`` record)
 and writes a combined results file, so the run is viewable later.
@@ -100,7 +101,7 @@ def select(args: argparse.Namespace) -> list[Path]:
 
 
 def histogram(results: list[dict]) -> str:
-    """A 0-10 score bar chart — the calibration signal. In 'existing' mode a low
+    """A 0-10 score bar chart — the calibration signal. In 'stored' mode a low
     skew means the judge agrees the flagged responses were bad."""
     scores = [r["score"] for r in results if isinstance(r.get("score"), int)]
     if not scores:
@@ -121,10 +122,10 @@ def main() -> int:
     )
     ap.add_argument(
         "--mode",
-        choices=("existing", "regen"),
-        default="existing",
-        help="existing = judge the stored bad response (cheap, no replay); "
-        "regen = regenerate then judge the improvement (expensive)",
+        choices=("stored", "regen"),
+        default="stored",
+        help="stored = judge the captured response (cheap, no replay; the "
+        "baseline); regen = replay the turn then judge the new response",
     )
     ap.add_argument("--model", default=None, help="replay model (regen mode only)")
     ap.add_argument("--judge-model", default=None, help="override the judge model")
@@ -141,7 +142,9 @@ def main() -> int:
         print(f"no bundles selected from {DATA_DIR}", file=sys.stderr)
         return 1
 
-    scorer = judge.judge_bundle if args.mode == "regen" else judge.judge_bundle_existing
+    scorer = (
+        judge.judge_bundle_regen if args.mode == "regen" else judge.judge_bundle_stored
+    )
     judge_model = args.judge_model or judge.DEFAULT_JUDGE_MODEL
     work = "replay+judge" if args.mode == "regen" else "judge stored response"
     print(
@@ -188,7 +191,12 @@ def main() -> int:
         for r, b in zip(results, bundles):
             if isinstance(r.get("score"), int):  # don't persist failed judge calls
                 append_judgement(
-                    b, r, mode=args.mode, judge_model=judge_model, judged_at=stamp
+                    b,
+                    r,
+                    mode=args.mode,
+                    judge_model=judge_model,
+                    judged_at=stamp,
+                    rubric=judge.RUBRIC,
                 )
                 saved += 1
         report = DATA_DIR / f"eval-{args.mode}-{stamp}.json"
@@ -280,7 +288,7 @@ def main() -> int:
                 "  (rough: caps each bundle's log at the context window, then "
                 "ignores prompt caching + output-token variance)"
             )
-        else:  # existing mode: cost is ~flat per bundle (input is just the reply)
+        else:  # stored mode: cost is ~flat per bundle (input is just the reply)
             per = total_cost / ok
             print(f"avg cost/bundle: ${per:.4f} (judge call only — no replay)")
             print(
@@ -291,7 +299,7 @@ def main() -> int:
 
     # full per-bundle JSON for the curious / for saving (drop the bulky text)
     for r in results:
-        for k in ("original", "recreated", "prompt", "badResponse"):
+        for k in ("original", "response", "prompt", "badResponse"):
             r.pop(k, None)
     print("\nper-bundle detail (JSON):")
     print(json.dumps(results, indent=2, default=str))

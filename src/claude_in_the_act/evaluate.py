@@ -1,14 +1,18 @@
-"""Aggregate eval: run the judge over every captured bad response (in parallel)
-and emit one scored report — per-transcript score + rationale, plus an overall
-XX/(10·N). A Boyd-specific measure of how much a model fixes what you dislike.
+"""Aggregate eval: run the judge over every captured response (in parallel) and
+emit one scored report — per-transcript score + rationale, plus an overall
+average. A Boyd-specific measure of how much a model fixes what you dislike.
 
-``cita-eval [model]`` regenerates each flagged response with ``[model]`` (the
-harness default if omitted), judges each against your feedback, and writes a
-markdown report to ``data/eval-<ts>-<model>.md``.
+Two modes, both scored on the same blind rubric so their numbers subtract:
+
+``cita-eval --mode stored`` (default, cheap) judges the responses you captured —
+the baseline. ``cita-eval --mode regen [--model M]`` replays each flagged turn
+under ``M`` and judges the new response. Reports land in
+``data/eval-<mode>-<ts>-<model>.md``.
 """
 
 from __future__ import annotations
 
+import argparse
 import concurrent.futures as cf
 import sys
 from datetime import datetime
@@ -41,12 +45,12 @@ def run_eval(
 ) -> list[dict]:
     """Judge every bundle concurrently; results keep the input order.
 
-    ``scorer`` picks the eval mode: it defaults to the regenerate-then-judge
-    ``judge.judge_bundle``; pass ``judge.judge_bundle_existing`` for the cheap
-    judge-the-stored-response pass. Resolved here (not as a default arg) so the
-    tests' ``monkeypatch`` of ``judge.judge_bundle`` still takes effect.
+    ``scorer`` picks the eval mode: it defaults to the cheap
+    ``judge.judge_bundle_stored``; pass ``judge.judge_bundle_regen`` for the
+    replay-then-judge pass. Resolved here (not as a default arg) so the tests'
+    ``monkeypatch`` of the judge entry points still takes effect.
     """
-    scorer = scorer or judge.judge_bundle
+    scorer = scorer or judge.judge_bundle_stored
     results: list[dict | None] = [None] * len(bundles)
     with cf.ThreadPoolExecutor(max_workers=max_workers) as ex:
         futs = {
@@ -80,6 +84,27 @@ def _cost_summary(results: list[dict]) -> str | None:
     return f"## Cost: ${total:.2f} total · ${total / n:.3f}/transcript avg"
 
 
+def _delta_summary(results: list[dict]) -> str | None:
+    """Baseline → new movement, over the bundles that carry both scores. This is
+    the headline of a regen run; ``None`` when nothing was baselined first."""
+    pairs = [
+        (r["baselineScore"], r["score"])
+        for r in results
+        if isinstance(r.get("score"), int) and isinstance(r.get("baselineScore"), int)
+    ]
+    if not pairs:
+        return None
+    base = sum(b for b, _ in pairs) / len(pairs)
+    new = sum(n for _, n in pairs) / len(pairs)
+    better = sum(1 for b, n in pairs if n > b)
+    same = sum(1 for b, n in pairs if n == b)
+    worse = len(pairs) - better - same
+    return (
+        f"## Change: {base:.1f} → {new:.1f} (**{new - base:+.1f}**) over {len(pairs)} "
+        f"baselined · {better} better, {same} same, {worse} worse"
+    )
+
+
 def format_report(
     results: list[dict], regen_model: str | None, judge_model: str, when: str
 ) -> str:
@@ -87,14 +112,17 @@ def format_report(
     errors = len(results) - len(vals)
     avg = sum(vals) / len(vals) if vals else 0.0
     lo, hi = (min(vals), max(vals)) if vals else (0, 0)
+    mode = next((r.get("mode") for r in results if r.get("mode")), "stored")
     out = [
-        f"# claude-in-the-act eval — model: {regen_model or '(harness default)'}",
-        f"_judge: {judge_model} · {when}_",
+        f"# claude-in-the-act eval [{mode}] — model: {regen_model or '(as captured)'}",
+        f"_judge: {judge_model} ({judge.RUBRIC}) · {when}_",
         "",
         f"## Overall: avg {avg:.1f}/10 · min {lo} · max {hi} · "
         f"{len(vals)} scored, {errors} error(s), {len(results)} total",
         "",
     ]
+    if (delta := _delta_summary(results)) is not None:
+        out += [delta, ""]
     if (cost := _cost_summary(results)) is not None:
         out += [cost, ""]
     out += ["## Per-transcript (worst first)", ""]
@@ -103,6 +131,9 @@ def format_report(
     ):
         s = r.get("score")
         tag = f"{s}/10" if isinstance(s, int) else "?/10"
+        base = r.get("baselineScore")
+        if isinstance(base, int) and isinstance(s, int):
+            tag += f" · was {base}/10 ({s - base:+d})"
         fb = " ".join((r.get("feedback") or "").split())
         out.append(f"### [{tag}] {fb[:80]}")
         out.append(f"- **why:** {r.get('rationale', '')}")
@@ -112,16 +143,33 @@ def format_report(
 
 
 def main() -> int:
-    args = [a for a in sys.argv[1:] if not a.startswith("-")]
-    regen_model = args[0] if args else None
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--mode",
+        choices=("stored", "regen"),
+        default="stored",
+        help="stored = judge the captured response (cheap, no replay; the "
+        "baseline); regen = replay the turn then judge the new response",
+    )
+    ap.add_argument("--model", default=None, help="replay model (regen mode only)")
+    ap.add_argument(
+        "--judge-model", default=DEFAULT_JUDGE_MODEL, help="model doing the scoring"
+    )
+    ap.add_argument("--workers", type=int, default=4, help="parallel judge calls")
+    args = ap.parse_args()
+
     bundles = sorted(str(b) for b in DATA_DIR.glob("*.jsonl"))
     if not bundles:
         print(f"no bundles in {DATA_DIR}", file=sys.stderr)
         return 1
 
+    scorer = (
+        judge.judge_bundle_regen if args.mode == "regen" else judge.judge_bundle_stored
+    )
     print(
-        f"judging {len(bundles)} transcripts with model="
-        f"{regen_model or '(default)'} (judge {DEFAULT_JUDGE_MODEL}) ...",
+        f"judging {len(bundles)} transcripts [{args.mode}] "
+        f"replay-model={args.model or '(as captured)'} "
+        f"judge={args.judge_model} ...",
         file=sys.stderr,
     )
 
@@ -133,12 +181,19 @@ def main() -> int:
         )
 
     when = datetime.now().strftime("%Y-%m-%d %H:%M")
-    results = run_eval(bundles, regen_model, on_done=progress)
-    report = format_report(results, regen_model, DEFAULT_JUDGE_MODEL, when)
+    results = run_eval(
+        bundles,
+        args.model,
+        judge_model=args.judge_model,
+        max_workers=args.workers,
+        on_done=progress,
+        scorer=scorer,
+    )
+    report = format_report(results, args.model, args.judge_model, when)
 
     ts = datetime.now().strftime("%Y%m%dT%H%M%S")
-    safe_model = (regen_model or "default").replace("/", "-")
-    out_path = DATA_DIR / f"eval-{ts}-{safe_model}.md"
+    safe_model = (args.model or "as-captured").replace("/", "-")
+    out_path = DATA_DIR / f"eval-{args.mode}-{ts}-{safe_model}.md"
     out_path.write_text(report + "\n")
     print("\n" + report)
     print(f"\nsaved report: {out_path}", file=sys.stderr)

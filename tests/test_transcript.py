@@ -188,17 +188,25 @@ def test_append_judgement_round_trips(tmp_path):
     rec = append_judgement(
         p,
         {"score": 2, "rationale": "bad", "judgedModel": "claude-opus-4-8"},
-        mode="existing",
-        judge_model="claude-sonnet-4-6",
+        mode="stored",
+        judge_model="claude-sonnet-5",
         judged_at="20260624T120000",
+        rubric="blind-v1",
     )
     assert rec["judgedAt"] == "20260624T120000"
 
     append_judgement(
-        p, {"score": 7}, mode="regen", judge_model="m", judged_at="20260624T130000"
+        p,
+        {"score": 7, "baselineScore": 2},
+        mode="regen",
+        judge_model="m",
+        judged_at="20260624T130000",
+        rubric="blind-v1",
     )
     jr = judge_results(load_bundle(p))
     assert [r["score"] for r in jr] == [2, 7]  # oldest first, both kept
-    assert jr[0]["mode"] == "existing"
-    assert jr[0]["judgeModel"] == "claude-sonnet-4-6"
+    assert jr[0]["mode"] == "stored"
+    assert jr[0]["rubric"] == "blind-v1"
+    assert jr[0]["judgeModel"] == "claude-sonnet-5"
     assert jr[0]["judgedModel"] == "claude-opus-4-8"
+    assert jr[1]["baselineScore"] == 2  # the regen record carries its comparison

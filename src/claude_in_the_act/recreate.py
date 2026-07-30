@@ -191,6 +191,27 @@ def undo_last_turn(recs: list[dict], repo: Path) -> dict:
     }
 
 
+def local_repo_with_sha(cwd: str | None, sha: str) -> str | None:
+    """The nearest existing ancestor of ``cwd`` that is a git repo holding ``sha``.
+
+    Captures taken inside a ``git worktree`` (Claude Code puts them under
+    ``<repo>/.claude/worktrees/<name>``) record a cwd that gets deleted the moment
+    the branch is done — but the commits still live in the parent repo's object
+    store, so walking up recovers them without retaining the worktree. ``cwd``
+    itself is tried first, so an intact repo takes the same path it always did.
+    """
+    if not cwd or not sha:
+        return None
+    for cand in [Path(cwd), *Path(cwd).parents]:
+        if not cand.is_dir():
+            continue
+        if git("-C", str(cand), "rev-parse", "--git-dir").returncode != 0:
+            continue
+        if git("-C", str(cand), "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0:
+            return str(cand)
+    return None
+
+
 def reconstruct(annotation: dict, patch_path: Path | None, dest: Path) -> str:
     """Rebuild the working tree at capture time into ``dest``.
 
@@ -209,18 +230,18 @@ def reconstruct(annotation: dict, patch_path: Path | None, dest: Path) -> str:
     source = None
 
     # Fast path: a detached worktree off the local repo, if it still has the SHA.
-    if (
-        cwd
-        and Path(cwd).is_dir()
-        and git("-C", cwd, "rev-parse", "--git-dir").returncode == 0
-        and git("-C", cwd, "cat-file", "-e", sha).returncode == 0
-    ):
+    # Falls back to the nearest ancestor repo, so captures made in a since-deleted
+    # `.claude/worktrees/<name>` still reconstruct from the parent's objects.
+    local = local_repo_with_sha(cwd, sha)
+    if local:
         with WORKTREE_LOCK:  # `git worktree add` on one repo isn't concurrency-safe
             if (
-                git("-C", cwd, "worktree", "add", "--detach", str(dest), sha).returncode
+                git(
+                    "-C", local, "worktree", "add", "--detach", str(dest), sha
+                ).returncode
                 == 0
             ):
-                source = f"worktree:{cwd}"
+                source = f"worktree:{local}"
 
     # Fallback: clone the remote (default) or the local path.
     if source is None:
