@@ -84,12 +84,27 @@ def _cost_summary(results: list[dict]) -> str | None:
     return f"## Cost: ${total:.2f} total · ${total / n:.3f}/transcript avg"
 
 
+def reproduced(r: dict) -> bool:
+    """Did the replay actually put the model back in the original situation?
+
+    ``preTurnExact`` goes False when the flagged turn ran shell commands we can't
+    reverse from the transcript (``gh pr create``, ``git commit``). Those replays
+    routinely meet a *different* world — the branch has since been pushed and the
+    PR merged, so the model looks around, sees the work is already done, and says
+    so. The blind judge correctly scores that 10 (the complaint doesn't describe
+    the response) but the 10 means "never faced the situation", not "fixed it".
+    Averaging those in silently converts reconstruction failures into wins.
+    """
+    return r.get("preTurnExact") is not False
+
+
 def _delta_summary(results: list[dict]) -> str | None:
-    """Baseline → new movement, over the bundles that carry both scores. This is
-    the headline of a regen run; ``None`` when nothing was baselined first."""
+    """Baseline → new movement, over bundles that carry both scores *and* actually
+    reproduced. ``None`` when nothing was baselined first."""
+    usable = [r for r in results if reproduced(r)]
     pairs = [
         (r["baselineScore"], r["score"])
-        for r in results
+        for r in usable
         if isinstance(r.get("score"), int) and isinstance(r.get("baselineScore"), int)
     ]
     if not pairs:
@@ -99,10 +114,21 @@ def _delta_summary(results: list[dict]) -> str | None:
     better = sum(1 for b, n in pairs if n > b)
     same = sum(1 for b, n in pairs if n == b)
     worse = len(pairs) - better - same
-    return (
+    dropped = sum(
+        1 for r in results if not reproduced(r) and isinstance(r.get("score"), int)
+    )
+    out = (
         f"## Change: {base:.1f} → {new:.1f} (**{new - base:+.1f}**) over {len(pairs)} "
         f"baselined · {better} better, {same} same, {worse} worse"
     )
+    if dropped:
+        out += (
+            f"\n\n> {dropped} further bundle(s) scored but are **excluded**: the "
+            f"replay could not restore the pre-turn state (unreversible shell "
+            f"commands in the flagged turn), so the model did not face the "
+            f"original situation and its score is not a model-quality signal."
+        )
+    return out
 
 
 def format_report(
