@@ -23,7 +23,13 @@ import tempfile
 import uuid
 from pathlib import Path
 
-from claude_in_the_act.harness import WORKTREE_LOCK, claude_meta, git, run_claude
+from claude_in_the_act.harness import (
+    WORKTREE_LOCK,
+    claude_meta,
+    git,
+    git_out,
+    run_claude,
+)
 from claude_in_the_act.transcript import (
     ANNOTATION_TYPE,
     annotation as bundle_annotation,
@@ -205,10 +211,14 @@ def local_repo_with_sha(cwd: str | None, sha: str) -> str | None:
     for cand in [Path(cwd), *Path(cwd).parents]:
         if not cand.is_dir():
             continue
-        if git("-C", str(cand), "rev-parse", "--git-dir").returncode != 0:
+        # Normalise to the repo root: an intermediate directory (e.g. the
+        # surviving `.claude/worktrees/` whose child was deleted) resolves to the
+        # containing repo, and reporting *that* is what callers want to see.
+        top = git_out("-C", str(cand), "rev-parse", "--show-toplevel")
+        if not top:
             continue
-        if git("-C", str(cand), "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0:
-            return str(cand)
+        if git("-C", top, "cat-file", "-e", f"{sha}^{{commit}}").returncode == 0:
+            return top
     return None
 
 
