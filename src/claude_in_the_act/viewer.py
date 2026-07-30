@@ -2,8 +2,10 @@
 
 Each bundle in ``DATA_DIR`` becomes a "case": the sidebar lists them with a
 slice of your feedback (the complaint), clicking one renders the full chat
-scrolled to the bottom — i.e. to the flagged response, the thing that annoyed
-you. No server: all data is embedded in the page and rendered lazily per case.
+scrolled to the bottom — where your ``BAD:`` message sits, just below the
+response that prompted it. We never guess which message you flagged; the only
+signal is that final ``BAD:`` turn. No server: all data is embedded in the
+page and rendered lazily per case.
 
 Tool noise (file dumps, command output, tool inputs) is truncated so the file
 stays openable; the prompts and assistant prose — the part you actually read —
@@ -65,15 +67,20 @@ def _assistant_blocks(rec: dict) -> list[dict]:
         if kind == "text" and b.get("text", "").strip():
             blocks.append({"k": "text", "text": _clip(b["text"], _TEXT_CAP)})
         elif kind == "thinking" and b.get("thinking", "").strip():
-            blocks.append({"k": "thinking", "text": _clip(b["thinking"], _THINKING_CAP)})
+            blocks.append(
+                {"k": "thinking", "text": _clip(b["thinking"], _THINKING_CAP)}
+            )
         elif kind == "tool_use":
             try:
                 rendered = json.dumps(b.get("input", {}), indent=2, ensure_ascii=False)
             except (TypeError, ValueError):
                 rendered = str(b.get("input"))
             blocks.append(
-                {"k": "tool_use", "name": b.get("name", "tool"),
-                 "input": _clip(rendered, _TOOL_INPUT_CAP)}
+                {
+                    "k": "tool_use",
+                    "name": b.get("name", "tool"),
+                    "input": _clip(rendered, _TOOL_INPUT_CAP),
+                }
             )
     return blocks
 
@@ -119,17 +126,6 @@ def _messages(recs: list[dict]) -> list[dict]:
     return msgs
 
 
-def _flag_from(msgs: list[dict]) -> int:
-    """Index of the last real user prompt — the flagged exchange starts here
-    (that prompt + every assistant turn after it = the response you flagged).
-    -1 if there is no user prompt."""
-    last = -1
-    for i, m in enumerate(msgs):
-        if m["role"] == "user":
-            last = i
-    return last
-
-
 def _pretty_ts(captured: str) -> str:
     """``20260618T122734`` → ``2026-06-18 12:27``; pass through anything else."""
     if len(captured) >= 13 and captured[8] == "T":
@@ -162,7 +158,6 @@ def build_view(data_dir: Path) -> list[dict]:
                 "git": ann.get("git") or {},
                 "model": _last_model(recs),
                 "messages": msgs,
-                "flagFrom": _flag_from(msgs),
             }
         )
     cases.sort(key=lambda c: c["capturedAt"], reverse=True)
@@ -192,10 +187,8 @@ def main() -> int:
         return 1
     out.write_text(render_html(cases), encoding="utf-8")
     size_mb = out.stat().st_size / 1e6
-    flagged = sum(1 for c in cases if c["flagFrom"] >= 0)
     print(
-        f"viewer: {len(cases)} cases ({flagged} flagged) → {out.resolve()} "
-        f"({size_mb:.1f} MB)",
+        f"viewer: {len(cases)} cases → {out.resolve()} ({size_mb:.1f} MB)",
         file=sys.stderr,
     )
     if "--no-open" not in sys.argv:
@@ -216,172 +209,143 @@ _TEMPLATE = r"""<!doctype html>
 <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Hanken+Grotesk:wght@400;500;600;800&display=swap" rel="stylesheet">
 <style>
 :root{
-  --ink:#0e1116; --slate:#161b22; --slate-2:#1b212a; --slate-3:#232c37;
-  --line:#2b3540; --paper:#e9e4d8; --muted:#8a94a1; --faint:#5b6573;
-  --amber:#e0a23a; --amber-soft:rgba(224,162,58,.14); --flag:#ff4b3e;
-  --flag-soft:rgba(255,75,62,.12);
+  --paper:#f4f0e7; --sidebar:#ece5d6; --card:#fdfbf6; --card-2:#f1ebdd;
+  --line:#e2dac8; --hair:#e9e1cf;
+  --ink:#2c2a25; --muted:#776f60; --faint:#a89e89;
+  --accent:#4c5673; --accent-soft:rgba(76,86,115,.09);
+  --flag:#b0442d; --flag-soft:rgba(176,68,45,.06);
+  --code:#5d4b27;
   --mono:"Space Mono",ui-monospace,Menlo,Consolas,monospace;
   --body:"Hanken Grotesk",ui-sans-serif,system-ui,sans-serif;
-  --sidebar:340px;
+  --sidebar-w:340px;
 }
 *{box-sizing:border-box}
 html,body{height:100%}
 body{
-  margin:0; background:var(--ink); color:var(--paper);
-  font-family:var(--body); font-size:15px; line-height:1.55;
-  display:grid; grid-template-columns:var(--sidebar) 1fr; overflow:hidden;
+  margin:0; background:var(--paper); color:var(--ink);
+  font-family:var(--body); font-size:15px; line-height:1.58;
+  display:grid; grid-template-columns:var(--sidebar-w) 1fr; overflow:hidden;
+  -webkit-font-smoothing:antialiased;
 }
-::selection{background:var(--amber);color:#0b0e12}
+::selection{background:var(--accent);color:#fff}
 
 /* ---- sidebar : the case index -------------------------------------- */
 #index{
-  background:var(--slate); border-right:1px solid var(--line);
+  background:var(--sidebar); border-right:1px solid var(--line);
   display:flex; flex-direction:column; min-height:0;
 }
 .brand{padding:18px 20px 14px; border-bottom:1px solid var(--line)}
 .brand h1{
   margin:0; font-family:var(--mono); font-weight:700; font-size:15px;
-  letter-spacing:.02em; color:var(--paper);
+  letter-spacing:.01em; color:var(--ink);
 }
 .brand h1 .red{color:var(--flag)}
 .brand .sub{
-  font-family:var(--mono); font-size:11px; color:var(--faint);
-  margin-top:4px; letter-spacing:.04em; text-transform:uppercase;
+  font-family:var(--mono); font-size:10.5px; color:var(--faint);
+  margin-top:5px; letter-spacing:.05em; text-transform:uppercase;
 }
 .search{padding:12px 14px; border-bottom:1px solid var(--line)}
 .search input{
-  width:100%; background:var(--ink); border:1px solid var(--line);
-  color:var(--paper); font-family:var(--mono); font-size:12px;
-  padding:9px 11px; border-radius:6px; outline:none;
+  width:100%; background:var(--card); border:1px solid var(--line);
+  color:var(--ink); font-family:var(--mono); font-size:12px;
+  padding:9px 11px; border-radius:7px; outline:none;
 }
-.search input:focus{border-color:var(--amber);box-shadow:0 0 0 1px var(--amber-soft)}
+.search input:focus{border-color:var(--accent); box-shadow:0 0 0 3px var(--accent-soft)}
 .search input::placeholder{color:var(--faint)}
 #cases{overflow-y:auto; flex:1; min-height:0; padding:8px}
 .case{
   display:block; width:100%; text-align:left; cursor:pointer;
-  background:transparent; border:1px solid transparent; border-radius:8px;
-  padding:12px 13px 13px; margin-bottom:4px; color:inherit; position:relative;
+  background:transparent; border:1px solid transparent; border-radius:9px;
+  padding:12px 14px 13px; margin-bottom:3px; color:inherit; position:relative;
   border-left:2px solid transparent;
 }
-.case:hover{background:var(--slate-2)}
-.case:focus-visible{outline:2px solid var(--amber);outline-offset:1px}
-.case.active{background:var(--slate-2); border-color:var(--line); border-left-color:var(--amber)}
-.case.flagged{border-left-color:var(--flag)}
-.case.flagged.active{border-left-color:var(--flag)}
+.case:hover{background:rgba(0,0,0,.035)}
+.case:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+.case.active{background:var(--card); border-color:var(--line); border-left-color:var(--accent); box-shadow:0 1px 2px rgba(0,0,0,.04)}
 .case .meta{
   display:flex; justify-content:space-between; align-items:baseline; gap:8px;
-  font-family:var(--mono); font-size:10.5px; color:var(--faint);
+  font-family:var(--mono); font-size:10px; color:var(--faint);
   letter-spacing:.03em; margin-bottom:6px;
 }
-.case .repo{color:var(--amber); text-overflow:ellipsis; overflow:hidden; white-space:nowrap}
+.case .repo{color:var(--accent); font-weight:700; text-overflow:ellipsis; overflow:hidden; white-space:nowrap}
 .case .complaint{
-  font-family:var(--mono); font-size:12.5px; line-height:1.45; color:var(--paper);
+  font-family:var(--mono); font-size:12px; line-height:1.5; color:var(--ink);
   display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden;
 }
 .case .complaint.empty{color:var(--faint); font-style:italic}
-.case .tag{
-  position:absolute; top:11px; right:11px; font-family:var(--mono);
-  font-size:8.5px; font-weight:700; letter-spacing:.12em; color:var(--flag);
-  border:1px solid var(--flag); padding:1px 4px; border-radius:3px; display:none;
-}
-.case.flagged .tag{display:inline-block}
 
 /* ---- reading pane -------------------------------------------------- */
 #stage{display:flex; flex-direction:column; min-height:0; min-width:0}
 #dossier{
-  padding:18px 32px 16px; border-bottom:1px solid var(--line);
-  background:linear-gradient(180deg,var(--slate) 0%,var(--ink) 100%);
+  padding:18px 32px 16px; border-bottom:1px solid var(--line); background:var(--sidebar);
 }
 #dossier .row{
-  display:flex; gap:18px; flex-wrap:wrap; font-family:var(--mono);
-  font-size:11px; color:var(--faint); letter-spacing:.04em; margin-bottom:10px;
+  display:flex; gap:20px; flex-wrap:wrap; font-family:var(--mono);
+  font-size:11px; color:var(--muted); letter-spacing:.02em; margin-bottom:11px;
 }
-#dossier .row b{color:var(--muted); font-weight:400}
-#dossier .row .k{color:var(--amber)}
-#complaint-banner{
-  font-family:var(--mono); font-size:14px; line-height:1.5; color:var(--paper);
-  border-left:3px solid var(--flag); background:var(--flag-soft);
-  padding:11px 16px; border-radius:0 6px 6px 0; white-space:pre-wrap;
-}
-#complaint-banner .label{
-  display:block; font-size:9.5px; font-weight:700; letter-spacing:.16em;
-  color:var(--flag); margin-bottom:5px;
-}
-#chat{overflow-y:auto; flex:1; min-height:0; padding:28px 32px 120px; scroll-behavior:smooth}
-#chat.wide{max-width:none}
+#dossier .row .k{color:var(--faint); text-transform:uppercase; letter-spacing:.08em; margin-right:2px}
+#chat{overflow-y:auto; flex:1; min-height:0; padding:30px 32px 120px}
 
 /* turns */
-.turn{max-width:880px; margin:0 auto 22px; position:relative}
+.turn{max-width:780px; margin:0 auto 20px; position:relative}
 .turn .who{
-  font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.14em;
+  font-family:var(--mono); font-size:9.5px; font-weight:700; letter-spacing:.16em;
   text-transform:uppercase; color:var(--faint); margin-bottom:7px;
 }
-.turn.user .who{color:var(--amber)}
-.turn.assistant .who{color:var(--muted)}
+.turn.user .who{color:var(--accent)}
 .bubble{
-  border:1px solid var(--line); border-radius:10px; padding:14px 18px;
-  background:var(--slate-2); white-space:pre-wrap; word-wrap:break-word;
+  border:1px solid var(--line); border-radius:11px; padding:14px 18px;
+  background:var(--card); white-space:pre-wrap; word-wrap:break-word;
 }
-.turn.user .bubble{background:var(--amber-soft); border-color:rgba(224,162,58,.35); border-left:2px solid var(--amber)}
-.turn.assistant .bubble{background:var(--slate-2)}
+.turn.user .bubble{background:var(--accent-soft); border-color:rgba(76,86,115,.22); border-left:2px solid var(--accent)}
 .bubble + .bubble{margin-top:8px}
 .turn p{margin:0 0 .7em} .turn p:last-child{margin:0}
-.turn code{font-family:var(--mono); font-size:.86em; background:#0c0f14; padding:.1em .35em; border-radius:4px; color:#f0d39a}
-.turn pre{background:#0b0e12; border:1px solid var(--line); border-radius:8px; padding:12px 14px; overflow-x:auto; margin:.6em 0}
-.turn pre code{background:none; padding:0; color:#d6e2ec; font-size:12.5px; line-height:1.5}
-.turn h1,.turn h2,.turn h3{font-family:var(--body); line-height:1.25; margin:.9em 0 .4em}
-.turn h1{font-size:1.3em} .turn h2{font-size:1.15em} .turn h3{font-size:1.02em}
+.turn code{font-family:var(--mono); font-size:.85em; background:var(--card-2); padding:.1em .35em; border-radius:4px; color:var(--code)}
+.turn pre{background:var(--card-2); border:1px solid var(--line); border-radius:9px; padding:12px 14px; overflow-x:auto; margin:.6em 0}
+.turn pre code{background:none; padding:0; color:#3a382f; font-size:12.5px; line-height:1.55}
+.turn h1,.turn h2,.turn h3{font-family:var(--body); line-height:1.25; margin:.9em 0 .4em; font-weight:800}
+.turn h1{font-size:1.28em} .turn h2{font-size:1.14em} .turn h3{font-size:1.02em}
 .turn ul,.turn ol{margin:.4em 0 .7em; padding-left:1.4em}
-.turn a{color:var(--amber)}
+.turn a{color:var(--accent)}
 .turn blockquote{border-left:2px solid var(--line); margin:.5em 0; padding-left:12px; color:var(--muted)}
 
-/* thinking + tools : the machine layer, dimmed + foldable */
-details.fold{margin:8px 0; border:1px solid var(--line); border-radius:8px; background:#0c0f14; overflow:hidden}
+/* thinking + tools : the machine layer, quiet + foldable */
+details.fold{margin:8px 0; border:1px solid var(--line); border-radius:9px; background:var(--card-2); overflow:hidden}
 details.fold>summary{
   cursor:pointer; list-style:none; padding:8px 13px; font-family:var(--mono);
-  font-size:10.5px; letter-spacing:.06em; color:var(--faint); display:flex;
+  font-size:10.5px; letter-spacing:.05em; color:var(--muted); display:flex;
   align-items:center; gap:8px; user-select:none;
 }
 details.fold>summary::-webkit-details-marker{display:none}
-details.fold>summary::before{content:"▸"; color:var(--faint)}
-details.fold[open]>summary::before{content:"▾"}
-details.fold>summary:hover{color:var(--muted)}
-details.fold .body{padding:0 13px 12px; font-family:var(--mono); font-size:12px; line-height:1.5; white-space:pre-wrap; color:var(--muted); border-top:1px solid var(--line); padding-top:11px}
-details.thinking>summary{color:#9c8bbf}
-.toolname{color:var(--amber); font-weight:700}
-.turn.tool{max-width:880px}
-.turn.tool details.fold .body{color:#9fb0c0}
-.interrupt{max-width:880px; margin:0 auto 22px; font-family:var(--mono); font-size:11px; color:var(--flag); text-align:center; letter-spacing:.08em; text-transform:uppercase}
-.interrupt::before,.interrupt::after{content:"———— "} .interrupt::after{content:" ————"}
+details.fold>summary::before{content:"\25B8"; color:var(--faint)}
+details.fold[open]>summary::before{content:"\25BE"}
+details.fold>summary:hover{color:var(--ink)}
+details.fold .body{padding:11px 13px 12px; font-family:var(--mono); font-size:12px; line-height:1.55; white-space:pre-wrap; color:var(--muted); border-top:1px solid var(--line)}
+details.thinking>summary{color:#6f6488}
+.toolname{color:var(--accent); font-weight:700}
+.turn.tool{max-width:780px}
+.interrupt{max-width:780px; margin:0 auto 20px; font-family:var(--mono); font-size:10.5px; color:var(--faint); text-align:center; letter-spacing:.06em}
 
-/* the signature : the flagged exhibit */
-#flag-anchor{max-width:880px; margin:34px auto 18px; display:flex; align-items:center; gap:14px}
-#flag-anchor .line{flex:1; height:1px; background:linear-gradient(90deg,transparent,var(--flag))}
-#flag-anchor .line.r{background:linear-gradient(90deg,var(--flag),transparent)}
-#flag-anchor .stamp{
-  font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.22em;
-  color:var(--flag); border:1.5px solid var(--flag); padding:5px 11px; border-radius:4px;
-  white-space:nowrap; transform:rotate(-1.5deg); box-shadow:0 0 0 4px var(--flag-soft);
+/* your BAD: turn — the one thing we actually know you flagged. Sits at the
+   bottom, just under the response that prompted it, lightly tinted to stand out. */
+.turn.bad .who{color:var(--flag)}
+.turn.bad .bubble{
+  background:var(--flag-soft); border-color:rgba(176,68,45,.28);
+  border-left:2px solid var(--flag);
 }
-.turn.exhibit .bubble{border-color:var(--flag); border-left:2px solid var(--flag); box-shadow:0 0 0 1px var(--flag-soft)}
-.turn.exhibit .who{color:var(--flag)}
-@keyframes pulse{0%{box-shadow:0 0 0 1px var(--flag-soft)}40%{box-shadow:0 0 0 6px var(--flag-soft)}100%{box-shadow:0 0 0 1px var(--flag-soft)}}
-.turn.exhibit.lit .bubble{animation:pulse 1.4s ease-out 1}
+.turn.bad .bubble .px{color:var(--flag); font-weight:700; font-family:var(--mono)}
 
 #empty{margin:auto; text-align:center; color:var(--faint); font-family:var(--mono); font-size:13px; padding:40px}
-#empty .big{font-size:42px; color:var(--line); margin-bottom:12px}
+#empty .big{font-size:40px; color:var(--line); margin-bottom:12px}
 
 /* scrollbars */
-#cases::-webkit-scrollbar,#chat::-webkit-scrollbar{width:10px}
-#cases::-webkit-scrollbar-thumb,#chat::-webkit-scrollbar-thumb{background:var(--slate-3); border-radius:6px; border:2px solid var(--slate)}
-#chat::-webkit-scrollbar-thumb{border-color:var(--ink)}
+#cases::-webkit-scrollbar,#chat::-webkit-scrollbar{width:11px}
+#cases::-webkit-scrollbar-thumb,#chat::-webkit-scrollbar-thumb{background:#d8cfbb; border-radius:6px; border:3px solid var(--sidebar)}
+#chat::-webkit-scrollbar-thumb{border-color:var(--paper)}
 
 @media (max-width:820px){
   body{grid-template-columns:1fr; grid-template-rows:auto 1fr}
   #index{max-height:42vh}
-}
-@media (prefers-reduced-motion:reduce){
-  #chat{scroll-behavior:auto} .turn.exhibit.lit .bubble{animation:none}
 }
 </style>
 </head>
@@ -403,7 +367,6 @@ details.thinking>summary{color:#9c8bbf}
       <span><b><span class="k">repo</span> <span id="d-repo"></span></b></span>
       <span><b><span class="k">model</span> <span id="d-model"></span></b></span>
     </div>
-    <div id="complaint-banner"><span class="label">complaint on file</span><span id="d-feedback"></span></div>
   </header>
   <div id="chat"><div id="empty"><div class="big">⚐</div>pick a case from the index<br>to read the transcript</div></div>
 </main>
@@ -453,7 +416,7 @@ function fold(cls,label,body,open){
     '</summary><div class="body">'+body+'</div></details>';
 }
 
-function renderTurn(m,exhibit){
+function renderTurn(m){
   if(m.role==='interrupt') return '<div class="interrupt">request interrupted by user</div>';
   if(m.role==='tool'){
     const body=m.results.map(r=>esc(r)).join('\n\n<span style="color:var(--faint)">— — —</span>\n\n');
@@ -469,8 +432,7 @@ function renderTurn(m,exhibit){
     else if(b.k==='thinking') inner+=fold('thinking','thinking',esc(b.text),false);
     else if(b.k==='tool_use') inner+=fold('','<span class="toolname">'+esc(b.name)+'</span>',esc(b.input),false);
   }
-  return '<div class="turn assistant'+(exhibit?' exhibit':'')+'"><div class="who">'+
-    (exhibit?'claude · flagged':'claude')+'</div>'+inner+'</div>';
+  return '<div class="turn assistant"><div class="who">claude</div>'+inner+'</div>';
 }
 
 let activeBtn=null;
@@ -485,27 +447,23 @@ function open(idx){
   document.getElementById('d-when').textContent = c.capturedAt||'—';
   document.getElementById('d-repo').textContent = c.repo||'—';
   document.getElementById('d-model').textContent= c.model||'—';
-  const fb=document.getElementById('d-feedback');
-  fb.textContent = c.feedback || '(no feedback recorded)';
 
-  let html='', flagged=false;
-  c.messages.forEach((m,i)=>{
-    if(i===c.flagFrom && c.flagFrom>=0){
-      html+='<div id="flag-anchor"><span class="line"></span><span class="stamp">⚑ FLAGGED EXCHANGE</span><span class="line r"></span></div>';
-      flagged=true;
-    }
-    const exhibit = c.flagFrom>=0 && i>c.flagFrom && m.role==='assistant';
-    html+=renderTurn(m,exhibit);
-  });
+  let html=c.messages.map(renderTurn).join('');
   if(!c.messages.length) html='<div id="empty">this bundle has no readable chat records</div>';
+  // Your actual final turn: the BAD: line the hook intercepted. It never
+  // reached the transcript, but the feedback is exactly what you typed after
+  // "BAD: ", so we rebuild it verbatim and place it last.
+  if(c.feedback){
+    html+='<div class="turn user bad"><div class="who">you</div><div class="bubble">'+
+      '<span class="px">BAD: </span>'+esc(c.feedback)+'</div></div>';
+  }
   elChat.innerHTML=html;
 
-  // scroll to the bottom = to the flagged response, then pulse it once
-  requestAnimationFrame(()=>{
-    elChat.scrollTop=elChat.scrollHeight;
-    const ex=elChat.querySelector('.turn.exhibit');
-    if(ex){ ex.classList.add('lit'); }
-  });
+  // Land on the bottom = on your BAD: turn, just under the response that
+  // prompted it. Reading scrollHeight forces layout so the jump is instant +
+  // correct even for huge transcripts; the rAF pass re-pins it after webfonts.
+  elChat.scrollTop=elChat.scrollHeight;
+  requestAnimationFrame(()=>{ elChat.scrollTop=elChat.scrollHeight; });
   location.hash=idx;
 }
 
@@ -515,11 +473,10 @@ function sidebar(filter){
   CASES.forEach((c,i)=>{
     if(f && !((c.feedback+' '+c.repo+' '+c.cwd).toLowerCase().includes(f))) return;
     const b=document.createElement('button');
-    b.className='case'+(c.flagFrom>=0?' flagged':'');
+    b.className='case';
     b.dataset.i=i; b.setAttribute('role','option');
     const fb=c.feedback?esc(c.feedback):'(no feedback recorded)';
     b.innerHTML=
-      '<span class="tag">⚑ flag</span>'+
       '<div class="meta"><span class="repo">'+esc(c.repo||'—')+'</span><span>'+esc(c.capturedAt)+'</span></div>'+
       '<div class="complaint'+(c.feedback?'':' empty')+'">'+fb+'</div>';
     b.addEventListener('click',()=>open(i));
