@@ -119,3 +119,50 @@ def test_reconstruct_uses_worktree_off_local_repo(tmp_path):
         ["git", "-C", str(repo), "worktree", "list"], capture_output=True, text=True
     ).stdout
     assert str(dest) not in wl  # worktree released
+
+
+# --- _mutating_bash: the gate that decides whether a replay is comparable -----
+#
+# It runs on the flagged turn's shell commands; a False here means the replay is
+# treated as a faithful reconstruction. Precision matters both ways — a missed
+# mutation silently corrupts a before/after comparison, a spurious one throws
+# away a usable transcript.
+
+NOT_MUTATIONS = [
+    # scratch space tells us nothing about the repo
+    "printf '%s' 'goal' > /tmp/claude-task-abc.txt",  # the status-line hook
+    "modal run lpf.py::smoke_spo > /tmp/smoke_spo.log 2>&1",
+    "uvx ruff check f.py >/dev/null 2>&1",
+    "zsh -c 'source ~/.zshrc >/dev/null 2>&1; ports'",
+    # comparison operators are not redirects
+    "awk 'NR>=2 {print $1}' file.txt",
+    'python3 -c "x = a -> b"',
+    # plain reads
+    "grep -n foo bar.py | tail -5",
+    "ls -la && git status --short",
+    "git -C /repo --no-pager diff --stat",
+    "the package was installed already",
+]
+
+MUTATIONS = [
+    "git -C /repo add sft.py && git commit -m x",
+    "gh pr create --base main --head feat --title t",
+    "git checkout feat-branch",
+    "rm -f runs/levels-0.json",
+    "chmod +x script.py",
+    "./build_levels.py --indices 0 > runs/run-index0.log 2>&1",
+    "uvx ruff format mod.py >/dev/null",  # rewrites the file despite the >/dev/null
+    "echo hi > notes.txt",
+    "pip install requests",
+    "sed -i '' s/a/b/ f.py",
+]
+
+
+def test_mutating_bash_ignores_scratch_and_comparisons():
+    for cmd in NOT_MUTATIONS:
+        assert not recreate._mutating_bash(cmd), f"false positive: {cmd!r}"
+
+
+def test_mutating_bash_catches_real_repo_writes():
+    for cmd in MUTATIONS:
+        assert recreate._mutating_bash(cmd), f"missed mutation: {cmd!r}"

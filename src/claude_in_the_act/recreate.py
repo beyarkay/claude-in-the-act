@@ -50,41 +50,52 @@ def _slug(path: str) -> str:
 
 
 _MUTATOR_TOKENS = (
-    "rm ",
-    "rmdir",
-    "mv ",
-    "cp ",
-    "sed -i",
-    "perl -i",
-    "tee ",
-    "touch ",
-    "mkdir",
-    "dd ",
-    "truncate",
-    "ln ",
-    "chmod",
-    "chown",
-    "git checkout",
-    "git reset",
-    "git clean",
-    "git stash",
-    "git apply",
-    "git restore",
-    "git rm",
-    "git mv",
-    "install",
-    "cargo build",
-    "make ",
-    "go build",
+    r"\brm\b",
+    r"\brmdir\b",
+    r"\bmv\b",
+    r"\bcp\b",
+    r"\bsed\s+-i",
+    r"\bperl\s+-i",
+    r"\btee\b",
+    r"\btouch\b",
+    r"\bmkdir\b",
+    r"\bdd\b",
+    r"\btruncate\b",
+    r"\bln\b",
+    r"\bchmod\b",
+    r"\bchown\b",
+    r"\bgit\b[^;|&]*\b(checkout|reset|clean|stash|apply|restore|rm|mv|add|commit)\b",
+    r"\bgh\s+(pr|release)\s+(create|merge|edit)\b",
+    r"\b(pip|uv pip|npm|cargo|go)\s+install\b",
+    r"\bcargo\s+build\b",
+    r"\bmake\b",
+    r"\bgo\s+build\b",
+    r"\bruff\s+format\b",  # rewrites the files it is pointed at
 )
+_MUTATOR_RE = re.compile("|".join(_MUTATOR_TOKENS))
+
+# A redirect whose target is scratch space tells us nothing about the repo. The
+# status-line hook alone (`printf … > /tmp/claude-task-<uuid>.txt`) fires on most
+# recent captures, and `>/dev/null` fires on a large share of the rest.
+_SCRATCH_TARGETS = ("/dev/null", "/tmp/", "/private/tmp/", "/var/folders/")
+
+# `>` or `>>` as a redirect, not as part of `>=`, `->`, `=>`, `2>&1` or `>&2`.
+_REDIRECT = re.compile(r"(?<![0-9&<>=!\-])>>?(?![&=>])\s*(?P<target>[^\s;|&)]*)")
 
 
 def _mutating_bash(cmd: str) -> bool:
-    """Heuristic: could this shell command have changed the file tree? Over-flags
-    (e.g. `> /dev/null`) on purpose — the flag is informational, not a gate."""
-    if re.search(r"(?<![0-9&])>>?(?!&)", cmd):  # redirection to a file
-        return True
-    return any(tok in cmd for tok in _MUTATOR_TOKENS)
+    """Could this shell command have changed the *repo's* file tree?
+
+    Used to decide whether a replay faithfully restored the pre-turn state, so
+    precision matters in both directions: a missed mutation silently corrupts a
+    comparison, while a spurious one discards a usable transcript. Redirects into
+    scratch space and comparison operators (``NR>=2``) are therefore not
+    mutations, but anything writing to an unrecognised path is.
+    """
+    for m in _REDIRECT.finditer(cmd):
+        if not m.group("target").startswith(_SCRATCH_TARGETS):
+            return True
+    return bool(_MUTATOR_RE.search(cmd))
 
 
 def _resolve(repo: Path, orig_cwd: str | None, file_path: str) -> Path:
