@@ -43,9 +43,21 @@ def test_judge_prompt_is_blind():
 def test_judge_prompt_scores_the_named_defect_only():
     p = judge.build_judge_prompt("too verbose", "summarise", "a reply", None)
     assert "Judge the defect, not the average." in p
-    assert "0 = <response> fully commits that failure" in p
+    assert "0 = <response> fully exhibits that behaviour" in p
     # symmetry: unrelated flaws must not drag the score down either
     assert "do NOT lower the score for flaws the commentary does not" in p
+
+
+def test_judge_prompt_scores_occurrence_not_justification():
+    """The judge must not dismiss a complaint on the grounds that the user
+    licensed the behaviour earlier — that lets it overrule the only ground truth
+    the eval has about what actually annoyed the user."""
+    p = judge.build_judge_prompt("bypassed the hook", "commit it", "a reply", None)
+    assert "judging OCCURRENCE, not JUSTIFICATION" in p
+    assert "even if you think the complaint is unfair" in p
+    # but a genuinely absent behaviour must still be scorable as absent, so a
+    # mis-captured turn isn't forced to score 0
+    assert "shows no sign of the behaviour" in p
 
 
 def test_parse_json_plain():

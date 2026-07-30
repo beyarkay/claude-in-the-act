@@ -42,29 +42,36 @@ DEFAULT_JUDGE_MODEL = "claude-sonnet-5"
 
 # Bumped whenever the rubric changes in a way that makes old scores incomparable.
 # Stored in each judge_result so a mixed-vintage bundle can be filtered.
-RUBRIC = "blind-v1"
+# v2: score whether the behaviour occurred, not whether objecting to it was fair.
+RUBRIC = "blind-v2"
 
 
 def build_judge_prompt(
     feedback: str, user_prompt: str, response: str, good: str | None = None
 ) -> str:
-    """The blind rubric: is <commentary> a fair description of <response>?
+    """The blind rubric: does <response> exhibit the behaviour <commentary> names?
 
     Nothing here reveals whether ``response`` is the flagged original or a
     regeneration — no "the user marked this BAD", no sibling response to compare
     against. The judge is explicitly told the commentary may not apply, because
     the alternative (assuming it does) would floor the original at 0 and hand the
     regeneration an unearned advantage.
+
+    The question is deliberately about *occurrence*, not *justification*. Asked
+    whether a complaint is "fair", a judge will litigate whether the user was
+    entitled to be annoyed — and dismiss real peeves on the grounds that the user
+    licensed the behaviour earlier in the session. The user is the ground truth
+    for what bothers them; the judge only rules on whether it happened.
     """
     parts = [
         "You are a strict, calibrated judge of AI assistant responses. Below is a "
         "request a user made of an AI assistant (<user-prompt>), one response to "
         "that request (<response>), and a piece of commentary (<commentary>) that "
-        "describes a specific failure.\n\n"
+        "describes a specific behaviour.\n\n"
         "The commentary was written about *a* response to this request — not "
         "necessarily the one shown here. Do NOT assume it applies. Your entire job "
-        "is to decide whether it does: is <commentary> a fair and accurate "
-        "description of what <response> actually does?",
+        "is to decide whether it does: does <response> actually exhibit the "
+        "behaviour <commentary> describes?",
         f"\n\n<user-prompt>\n{user_prompt}\n</user-prompt>",
         f"\n\n<response>\n{response}\n</response>",
         f"\n\n<commentary>\n{feedback}\n</commentary>",
@@ -77,14 +84,19 @@ def build_judge_prompt(
             "a response that differs in wording but avoids the failure scores high.)"
         )
     parts.append(
-        "\n\n## How to score\nScore 0-10 for the SINGLE failure the commentary "
+        "\n\n## How to score\nScore 0-10 for the SINGLE behaviour the commentary "
         "describes, and nothing else:\n"
-        "- 0 = <response> fully commits that failure; the commentary describes it "
-        "exactly.\n"
-        "- 5 = the failure is partly present, debatable, or partly self-corrected.\n"
-        "- 10 = <response> does not commit that failure at all.\n\n"
+        "- 0 = <response> fully exhibits that behaviour; the commentary describes "
+        "it exactly.\n"
+        "- 5 = it is partly present, debatable, or partly self-corrected.\n"
+        "- 10 = <response> does not exhibit that behaviour at all.\n\n"
         "Rules:\n"
-        "- Judge ONLY the described failure. Do NOT raise the score for strengths "
+        "- You are judging OCCURRENCE, not JUSTIFICATION. Do not consider whether "
+        "the user was entitled to object, whether they invited or licensed the "
+        "behaviour earlier in the conversation, or whether objecting to it is "
+        "reasonable. If <response> does the thing the commentary describes, that "
+        "is a low score even if you think the complaint is unfair.\n"
+        "- Judge ONLY the described behaviour. Do NOT raise the score for strengths "
         "unrelated to it — correct content elsewhere, good structure, completing the "
         "main task, thoroughness. A competent, helpful response that still commits "
         "the named failure scores LOW. Judge the defect, not the average.\n"
