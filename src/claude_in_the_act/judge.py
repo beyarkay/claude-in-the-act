@@ -202,7 +202,7 @@ def judge_bundle_stored(
         "feedback": ann.get("feedback", ""),
         "score": verdict["score"],
         "rationale": verdict["rationale"],
-        "judgedModel": model,  # the model that produced the captured response
+        "responseModel": model,  # the model that produced the captured response
         "prompt": prompt,
         "response": response,
         "hadGoodResponse": good is not None,
@@ -248,7 +248,7 @@ def judge_bundle_regen(
         "feedback": ann.get("feedback", ""),
         "score": score,
         "rationale": verdict["rationale"],
-        "judgedModel": regen.get("model"),  # the model that produced the new response
+        "responseModel": regen.get("model"),  # the model that produced the new response
         "baselineScore": base,
         "delta": (score - base)
         if isinstance(score, int) and base is not None

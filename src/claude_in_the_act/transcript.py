@@ -71,6 +71,9 @@ def append_judgement(
     so a batch run can stamp every record with one consistent timestamp, and
     ``rubric`` so scores from an older, differently-scaled judge are never
     silently compared against current ones.
+
+    ``judgeModel`` is the model doing the scoring; ``responseModel`` is the model
+    that wrote the response being scored. They are deliberately not near-homonyms.
     """
     record = {
         "type": JUDGE_RESULT_TYPE,
@@ -79,7 +82,7 @@ def append_judgement(
         "score": result.get("score"),
         "rationale": result.get("rationale"),
         "judgeModel": judge_model,
-        "judgedModel": result.get("judgedModel"),
+        "responseModel": result.get("responseModel"),
         "baselineScore": result.get("baselineScore"),
         "hadGoodResponse": result.get("hadGoodResponse"),
         "judgedAt": judged_at,

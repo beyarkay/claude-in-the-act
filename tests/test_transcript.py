@@ -187,7 +187,7 @@ def test_append_judgement_round_trips(tmp_path):
     p.write_text(json.dumps({"type": "bad_annotation", "feedback": "x"}) + "\n")
     rec = append_judgement(
         p,
-        {"score": 2, "rationale": "bad", "judgedModel": "claude-opus-4-8"},
+        {"score": 2, "rationale": "bad", "responseModel": "claude-opus-4-8"},
         mode="stored",
         judge_model="claude-sonnet-5",
         judged_at="20260624T120000",
@@ -207,6 +207,7 @@ def test_append_judgement_round_trips(tmp_path):
     assert [r["score"] for r in jr] == [2, 7]  # oldest first, both kept
     assert jr[0]["mode"] == "stored"
     assert jr[0]["rubric"] == "blind-v1"
+    # judgeModel = who scored; responseModel = who wrote the thing being scored
     assert jr[0]["judgeModel"] == "claude-sonnet-5"
-    assert jr[0]["judgedModel"] == "claude-opus-4-8"
+    assert jr[0]["responseModel"] == "claude-opus-4-8"
     assert jr[1]["baselineScore"] == 2  # the regen record carries its comparison

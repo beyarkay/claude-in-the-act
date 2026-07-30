@@ -59,32 +59,66 @@ still useful, just less precise.
 > this repo (`uv run …`) and isn't wired into the plugin yet — packaging it as
 > one-click slash commands is the next step.
 
-### 3. Regenerate + judge a single capture
+### 3. Baseline: how bad was it, really?
 
 ```
-uv run cita-judge ~/.claude/claude-in-the-act/data/<timestamp>-<session>.jsonl [model]
+uv run cita-eval --mode stored
 ```
 
-This is the single entry point. It **regenerates** the flagged turn under the
-current harness and then **judges** the result 0–10: how much better is the new
-response at addressing _your_ feedback (and matching your ideal answer, if you
-wrote one)? The judge runs on a different model (`claude-sonnet-4-6`) to avoid a
-model grading itself.
+Scores every captured response 0–10 against your own complaint, with no replay,
+so it's cheap (~$0.12 a transcript). **10 means the complaint doesn't apply.**
+Your captures should mostly score near 0 — that's the judge agreeing with you.
+Anything scoring high is worth reading: either the capture grabbed the wrong turn,
+or the complaint doesn't survive a second look.
 
-Pass a model id as the second argument to test a specific one —
-`claude-fable-5`, say, to check whether a newer model fixes what you flagged.
-
-### 4. Score your whole collection
+### 4. Regenerate, and see if the new model still does it
 
 ```
-uv run cita-eval [model]
+uv run cita-eval --mode regen --model claude-fable-5
 ```
 
-Runs the judge over **every** captured bundle in parallel and writes a markdown
-report to `data/eval-<timestamp>-<model>.md`: an overall average plus a
-per-transcript breakdown, worst first, each with the judge's rationale. This is
-the payoff — one command, one number, "how much does this model fix what I
-dislike."
+Replays every flagged turn under `--model` and scores the new response on the
+**same** rubric, then reports the movement: `1.6 → 7.4 (+5.8) · 31 better, 4
+same, 3 worse`. That difference is the whole point of the tool.
+
+`uv run cita-judge <bundle.jsonl> [model]` does one bundle and dumps the full
+JSON, which is what you want while debugging a single case.
+
+#### Why the judge is blind
+
+Both modes ask the judge one question: here is a request, here is **one**
+response, here is a piece of commentary describing a failure — does that
+commentary describe this response? The judge is never told whether it's looking
+at your original capture or a fresh regeneration, and never sees the other one.
+
+That symmetry is what makes the two numbers subtractable. The obvious design —
+"here's the old response, here's the new one, how much better is it?" — can't
+produce a baseline at all, because you can't run it against the old response by
+itself. It also quietly rewards any change. The judge is likewise told the
+commentary *may not apply*, so it can score a response 10 without being
+told it's the good one.
+
+Judging runs on `claude-sonnet-5` by default, so a model never grades itself.
+Change the rubric and bump `judge.RUBRIC`; scores carry that tag and old ones are
+never silently subtracted from new.
+
+### 5. Keep the code alive: `cita-pin`
+
+```
+uv run cita-pin          # pin every capture's commit
+uv run cita-pin --list   # what's safe, at risk, or lost
+```
+
+A capture stores a commit SHA and expects to check it out later. If that turn
+happened in a `git worktree` — Claude Code puts them under
+`<repo>/.claude/worktrees/<name>` — the directory and its branch usually get
+deleted long before you re-run the eval, and an unreachable commit is pruned by
+`git gc` within a fortnight. The transcript outlives the code it describes.
+
+`cita-pin` writes a `refs/cita/<capture>` ref in whichever repo holds each
+object. No worktree kept, no checkout, no working tree — just reachability. It
+lives outside `refs/heads`, so it never shows up in `git branch` or gets pushed
+by accident. Run it after a capture session; `--unpin` reverses it.
 
 ## How the replay stays honest
 

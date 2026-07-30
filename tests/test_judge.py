@@ -124,7 +124,7 @@ def test_judge_bundle_stored_judges_captured_response_without_replay(
     }
     assert out["score"] == 2
     assert out["mode"] == "stored"
-    assert out["judgedModel"] == "claude-opus-4-8"
+    assert out["responseModel"] == "claude-opus-4-8"
     assert out["hadGoodResponse"] is False
     assert out["judgeCost"] == {"costUsd": 0.001}
 
@@ -180,7 +180,7 @@ def test_judge_bundle_regen_scores_the_new_response_and_deltas(tmp_path, monkeyp
     assert out["score"] == 8
     assert out["baselineScore"] == 1
     assert out["delta"] == 7
-    assert out["judgedModel"] == "claude-opus-5"
+    assert out["responseModel"] == "claude-opus-5"
 
 
 def test_judge_bundle_regen_refuses_empty_regeneration(tmp_path, monkeypatch):
