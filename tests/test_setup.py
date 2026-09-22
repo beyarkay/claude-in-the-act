@@ -14,7 +14,7 @@ def test_install_and_uninstall_leave_foreign_skills_alone(tmp_path, monkeypatch)
 
     written = setup.install(Path("/opt/slash-bad"))
     assert mine.read_text() == "my own bad-list skill"
-    assert len(written) == 7  # 4 codex + 3 claude (bad-list was the user's)
+    assert len(written) == 9  # 5 codex + 4 claude (bad-list was the user's)
     compare = (tmp_path / ".claude/skills/bad-compare/SKILL.md").read_text()
     assert '"/opt/slash-bad/bin/slash-bad" compare $ARGUMENTS' in compare
     assert "disable-model-invocation: true" in compare

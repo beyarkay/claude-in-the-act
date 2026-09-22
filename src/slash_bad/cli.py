@@ -77,8 +77,11 @@ def cmd_delete(args) -> int:
     return 0
 
 
-def _selected(refs: list[str]) -> list[Case]:
-    return [find_case(r) for r in refs] if refs else all_cases()
+def _selected(refs: list[str], origin: str = "all") -> list[Case]:
+    cases = [find_case(r) for r in refs] if refs else all_cases()
+    if origin == "all":
+        return cases
+    return [c for c in cases if (c.meta.get("origin") == "mined") == (origin == "mined")]
 
 
 def cmd_compare(args) -> int:
@@ -179,6 +182,12 @@ def cmd_uninstall(args) -> int:
     return 0
 
 
+def cmd_mine(args) -> int:
+    from slash_bad import mine
+
+    return mine.main(args)
+
+
 def cmd_share(args) -> int:
     from slash_bad import share
 
@@ -241,6 +250,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="don't look for the right message when the flagged one doesn't match the complaint",
     )
+    p.add_argument(
+        "--origin",
+        choices=("all", "flagged", "mined"),
+        default="all",
+        help="flagged: only cases you saved with /bad; mined: only ones `mine` found",
+    )
     p.add_argument("--no-group", action="store_true", help="don't group cases by behaviour")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument(
@@ -265,6 +280,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("key", nargs="?")
     p.add_argument("value", nargs="?")
     p.set_defaults(fn=cmd_config)
+
+    p = sub.add_parser("mine", help="find bad moments in past sessions you never flagged")
+    p.add_argument("--dry-run", action="store_true", help="show what it finds without saving")
+    p.add_argument("--model", default="sonnet", help="model that reads the candidates")
+    p.add_argument("--limit", type=int, default=0, help="only read the N most recent candidates")
+    p.set_defaults(fn=cmd_mine)
 
     p = sub.add_parser(
         "share", help="anonymise cases and open a pull request on the shared Hugging Face dataset"

@@ -49,6 +49,19 @@ SKILLS = {
             "Don't add commentary on the results unless asked."
         ),
     },
+    "bad-mine": {
+        "description": "Find moments in your past Claude Code and Codex sessions where the "
+        "agent did something you'd object to, and add them to your slash-bad benchmark.",
+        "hint": "[--dry-run]",
+        "body": (
+            "Run this with the shell tool, in the background if you can (it reads every "
+            "session on this machine and asks a model about each candidate, so it takes a "
+            "few minutes):\n\n"
+            "    {cli} mine $ARGUMENTS\n\n"
+            "Show the user its output verbatim. Mention that `/bad-list` shows the new cases "
+            "(tagged mined) and `slash-bad delete <id>` removes any they disagree with."
+        ),
+    },
     "bad-share": {
         "description": "Anonymise your /bad cases and contribute them to the public "
         "slash-bad dataset on Hugging Face.",

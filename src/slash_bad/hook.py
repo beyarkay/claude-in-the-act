@@ -45,7 +45,8 @@ def list_text() -> str:
     lines = [f"slash-bad: {len(cases)} case(s)"]
     for i, c in enumerate(cases, 1):
         complaint = " ".join(c.complaint.split())
-        lines.append(f"{i:>3}. {c.meta.get('model', '?'):<24} {complaint[:90]}")
+        tag = "mined " if c.meta.get("origin") == "mined" else "      "
+        lines.append(f"{i:>3}. {tag}{c.meta.get('model', '?'):<24} {complaint[:84]}")
     return "\n".join(lines)
 
 
