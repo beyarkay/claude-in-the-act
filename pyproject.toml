@@ -22,10 +22,7 @@ dev = ["ty", "pytest"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-m 'not e2e'"
-markers = [
-    "e2e: end-to-end tests that spawn the real `claude` CLI (cost money + network; opt in with `-m e2e`)",
-]
+
 
 [tool.ruff]
 line-length = 100

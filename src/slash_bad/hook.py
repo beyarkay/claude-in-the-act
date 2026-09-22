@@ -66,7 +66,8 @@ def capture(payload: dict, complaint: str) -> str:
         f"  model:     {meta['model'] or 'unknown'}\n"
         f'  flagged:   "{flagged[:80]}{"…" if len(flagged) > 80 else ""}"\n'
         f"  complaint: {' '.join(complaint.split())[:100]}\n"
-        f"  Next: /bad-compare latest to see whether a newer model still does this."
+        f"  Next: {'$' if harness == 'codex' else '/'}bad-compare latest to see whether a newer "
+        "model still does this."
     )
 
 
