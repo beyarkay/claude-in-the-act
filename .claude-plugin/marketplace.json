@@ -1,14 +1,12 @@
 {
-  "name": "claude-in-the-act",
-  "owner": {
-    "name": "beyarkay"
-  },
-  "description": "A one-plugin marketplace: claude-in-the-act, for banking bad Claude Code responses as a personal eval set.",
+  "name": "slash-bad",
+  "owner": { "name": "beyarkay" },
+  "description": "slash-bad: flag bad agent responses with /bad and benchmark new models against them.",
   "plugins": [
     {
-      "name": "claude-in-the-act",
+      "name": "slash-bad",
       "source": "./",
-      "description": "Flag a bad response with `BAD: <why>`; it snapshots the transcript + git state to ~/.claude/claude-in-the-act/data."
+      "description": "/bad saves the moment an agent annoyed you; /bad-compare re-runs your saved moments on a newer model and scores it."
     }
   ]
 }

@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+exec env PYTHONPATH="$root/src" python3 -m slash_bad.cli "$@"

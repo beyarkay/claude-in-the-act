@@ -2,12 +2,8 @@
   "hooks": {
     "UserPromptSubmit": [
       {
-        "matcher": "",
         "hooks": [
-          {
-            "type": "command",
-            "command": "${CLAUDE_PLUGIN_ROOT}/flag-bad-response.sh"
-          }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/slash-bad-hook\"", "timeout": 30 }
         ]
       }
     ]

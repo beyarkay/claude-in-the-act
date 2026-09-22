@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# Runs on every prompt, so the common case is a pure-bash check with no Python.
+set -euo pipefail
+input=$(cat)
+re='"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*([/$](slash-bad:)?bad|BAD: )'
+[[ "$input" =~ $re ]] || exit 0
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+if ! command -v python3 >/dev/null 2>&1; then
+  echo "slash-bad: python3 (3.11+) not found, so nothing was saved." >&2
+  exit 2
+fi
+exec env PYTHONPATH="$root/src" python3 -m slash_bad.hook <<<"$input"

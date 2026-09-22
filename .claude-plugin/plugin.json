@@ -1,10 +1,8 @@
 {
-  "name": "claude-in-the-act",
-  "description": "Flag a bad Claude Code response with `BAD: <why>` and snapshot the session transcript + git state to a local eval set.",
-  "version": "0.1.0",
-  "author": {
-    "name": "beyarkay"
-  },
+  "name": "slash-bad",
+  "description": "Your personal benchmark for the things you actually care about. /bad <what went wrong> saves the moment; /bad-compare <model> re-runs every saved moment on a newer model and scores it.",
+  "version": "0.2.0",
+  "author": { "name": "beyarkay" },
   "homepage": "https://github.com/beyarkay/claude-in-the-act",
   "license": "MIT"
 }

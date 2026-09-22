@@ -1,0 +1,7 @@
+{
+  "name": "slash-bad",
+  "description": "Your personal benchmark for the things you actually care about. $bad <what went wrong> saves the moment; $bad-compare <model> re-runs every saved moment on a newer model and scores it.",
+  "version": "0.2.0",
+  "hooks": "./hooks/hooks.json",
+  "commands": "./commands"
+}

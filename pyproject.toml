@@ -1,23 +1,21 @@
 [project]
-name = "claude-in-the-act"
-version = "0.1.0"
-description = "Capture + replay bad Claude Code responses, for model-vs-model evals"
+name = "slash-bad"
+version = "0.2.0"
+description = "Your personal benchmark for the things you actually care about: /bad in Claude Code and Codex"
+readme = "README.md"
 requires-python = ">=3.11"
+license = "MIT"
 dependencies = []  # stdlib only at runtime
 
 [project.scripts]
-cita-capture = "claude_in_the_act.capture:main"
-cita-judge = "claude_in_the_act.judge:main"  # regenerate + judge in one step
-cita-eval = "claude_in_the_act.evaluate:main"  # judge all transcripts -> report
-cita-view = "claude_in_the_act.viewer:main"  # build + open the HTML transcript viewer
-cita-pin = "claude_in_the_act.pin:main"  # git-ref each capture's SHA so gc can't prune it
+slash-bad = "slash_bad.cli:main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/claude_in_the_act"]
+packages = ["src/slash_bad"]
 
 [dependency-groups]
 dev = ["ty", "pytest"]
