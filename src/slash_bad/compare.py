@@ -1,9 +1,22 @@
-"""Run the personal benchmark: judge every stored bad response, re-sample it on
-a new model, judge that blind on the same rubric, and tally the movement.
+"""Run the personal benchmark.
 
-Everything is cached in each case's ``results.jsonl``: a baseline is judged
-once per judge, a replay runs once per model, so re-running a comparison, or
-changing the judge, only pays for what is missing.
+For each saved case, three responses at the same point in the same conversation
+are judged blind against the user's complaint:
+
+* ``flagged``: the response that annoyed the user.
+* ``control``: the *old* model re-sampled on the same context.
+* ``new``: the new model re-sampled on the same context.
+
+Better / same / worse compares ``new`` with ``control``, not with ``flagged``.
+Every case was saved *because* one sample went wrong, so a fresh sample of the
+same old model usually scores higher too (regression to the mean); measuring
+against the flagged response alone would credit the new model with that.
+When the old model can't be run any more, the flagged response stands in and
+the row says so.
+
+Everything is cached in each case's ``results.jsonl``: a replay runs once per
+model and sample, a verdict once per judge and rubric, so re-running a
+comparison, or switching judge, only pays for what is missing.
 """
 
 from __future__ import annotations
@@ -53,108 +66,166 @@ def response_for(replay: dict, variant: str) -> str:
     return "\n\n".join(p for p in parts if p).strip()
 
 
-def baseline(case: Case, judge_model: str) -> dict:
-    """The stored flagged response's verdict, judged once per judge + rubric."""
-    cached = _latest(
-        case.results(), kind="verdict", target="original", judge=judge_model, rubric=judge.RUBRIC
-    )
+def _judge(case: Case, target: str, response: str, judge_model: str, extra: dict) -> dict:
+    match = {"kind": "verdict", "target": target, "judge": judge_model, "rubric": judge.RUBRIC}
+    cached = _latest(case.results(), **match, **{k: v for k, v in extra.items() if k == "variant"})
     if cached and cached.get("score") is not None:
         return cached
-    earlier, turn = judge_context(HARNESSES[case.harness].steps(case.context))
-    verdict = judge.score(case.complaint, earlier, turn, case.meta.get("flagged", ""), judge_model)
-    return case.add_result(
-        {
-            "kind": "verdict",
-            "target": "original",
-            "judge": judge_model,
-            "rubric": judge.RUBRIC,
-            "responseModel": case.meta.get("model"),
-            **verdict,
-        }
-    )
-
-
-def replayed(case: Case, model: str, proxy_url: str | None, fresh: bool) -> dict:
-    if not fresh:
-        cached = _latest(case.results(), kind="replay", requestedModel=model)
-        if cached and not cached.get("error"):
-            return cached
-    mod = HARNESSES[case.harness]
-    rec = mod.replay(case, model, proxy_url) if case.harness == "claude-code" else mod.replay(case, model)
-    return case.add_result({"replayId": uuid.uuid4().hex[:12], **rec})
-
-
-def judged_replay(case: Case, replay: dict, judge_model: str, variant: str) -> dict:
-    cached = _latest(
-        case.results(),
-        kind="verdict",
-        target=replay["replayId"],
-        judge=judge_model,
-        rubric=judge.RUBRIC,
-        variant=variant,
-    )
-    if cached and cached.get("score") is not None:
-        return cached
-    response = response_for(replay, variant)
-    if not response:
-        return {"score": None, "rationale": "replay produced no response"}
     earlier, turn = judge_context(HARNESSES[case.harness].steps(case.context))
     verdict = judge.score(case.complaint, earlier, turn, response, judge_model)
-    return case.add_result(
-        {
-            "kind": "verdict",
-            "target": replay["replayId"],
-            "judge": judge_model,
-            "rubric": judge.RUBRIC,
-            "variant": variant,
-            "responseModel": replay.get("model"),
-            **verdict,
-        }
+    return case.add_result({**match, **extra, **verdict})
+
+
+def baseline(case: Case, judge_model: str) -> dict:
+    """The flagged response's verdict."""
+    return _judge(
+        case,
+        "original",
+        case.meta.get("flagged", ""),
+        judge_model,
+        {"responseModel": case.meta.get("model")},
     )
 
 
-def outcome(old: int | None, new: int | None) -> str:
-    if old is None or new is None:
+def replays(case: Case, model: str, n: int, proxy_url: str | None, fresh: bool) -> list[dict]:
+    """``n`` replays of the case under ``model``, reusing cached ones."""
+    have = (
+        []
+        if fresh
+        else [
+            r
+            for r in case.results()
+            if r.get("kind") == "replay" and r.get("requestedModel") == model and not r.get("error")
+        ]
+    )
+    out = have[:n]
+    mod = HARNESSES[case.harness]
+    while len(out) < n:
+        rec = (
+            mod.replay(case, model, proxy_url)
+            if case.harness == "claude-code"
+            else mod.replay(case, model)
+        )
+        rec = case.add_result({"replayId": uuid.uuid4().hex[:12], **rec})
+        if rec.get("error"):
+            return out + [rec]
+        out.append(rec)
+    return out
+
+
+def scored_replays(
+    case: Case,
+    model: str,
+    n: int,
+    judge_model: str,
+    variant: str,
+    proxy_url: str | None,
+    fresh: bool,
+) -> dict:
+    """Mean score over ``n`` judged replays, or an ``error``."""
+    reps = replays(case, model, n, proxy_url, fresh)
+    if errs := [r for r in reps if r.get("error")]:
+        return {"error": errs[0]["error"], "model": model}
+    verdicts = []
+    for rep in reps:
+        response = response_for(rep, variant)
+        if not response:
+            return {"error": "replay produced no response", "model": model}
+        verdicts.append(
+            _judge(
+                case,
+                rep["replayId"],
+                response,
+                judge_model,
+                {"variant": variant, "responseModel": rep.get("model")},
+            )
+        )
+    scores = [v["score"] for v in verdicts if v.get("score") is not None]
+    if len(scores) < len(verdicts):
+        bad = next(v for v in verdicts if v.get("score") is None)
+        return {"error": bad.get("rationale", "judge failed"), "model": model}
+    return {
+        "score": sum(scores) / len(scores),
+        "scores": scores,
+        "model": reps[0].get("model") or model,
+        "response": response_for(reps[0], variant),
+        "why": verdicts[0].get("rationale", ""),
+        "judgeModel": verdicts[0].get("judgeModel"),
+        "toolAttempts": [a for r in reps for a in r.get("toolAttempts") or []],
+        "costUsd": sum(
+            c
+            for c in [r.get("costUsd") for r in reps] + [v.get("costUsd") for v in verdicts]
+            if isinstance(c, (int, float))
+        ),
+    }
+
+
+def outcome(reference: float | None, new: float | None) -> str:
+    if reference is None or new is None:
         return "error"
-    if new - old >= BETTER_BY:
+    if new - reference >= BETTER_BY:
         return "better"
-    if old - new >= BETTER_BY:
+    if reference - new >= BETTER_BY:
         return "worse"
     return "same"
 
 
 def compare_case(
-    case: Case, model: str, judge_model: str, variant: str, proxy_url: str | None, fresh: bool
+    case: Case,
+    model: str,
+    judge_model: str,
+    variant: str,
+    proxy_url: str | None,
+    fresh: bool,
+    samples: int = 1,
+    control: bool = True,
 ) -> dict:
+    old_model = case.meta.get("model", "")
     row = {
         "case": case.id,
         "complaint": case.complaint,
         "harness": case.harness,
-        "oldModel": case.meta.get("model", ""),
+        "oldModel": old_model,
         "requestedModel": model,
+        "oldResponse": case.meta.get("flagged", ""),
     }
     try:
         base = baseline(case, judge_model)
-        rep = replayed(case, model, proxy_url, fresh)
-        if rep.get("error"):
-            return {**row, "outcome": "error", "error": rep["error"], "old": base.get("score")}
-        verdict = judged_replay(case, rep, judge_model, variant)
+        new = scored_replays(case, model, samples, judge_model, variant, proxy_url, fresh)
+        if new.get("error"):
+            return {**row, "outcome": "error", "error": new["error"], "flagged": base.get("score")}
+        ctl = (
+            scored_replays(case, old_model, samples, judge_model, variant, proxy_url, fresh)
+            if control and old_model
+            else {"error": "control disabled"}
+        )
     except Exception as e:  # noqa: BLE001 — one broken case must not sink the run
         return {**row, "outcome": "error", "error": f"{type(e).__name__}: {e}"}
-    old, new = base.get("score"), verdict.get("score")
+    flagged = base.get("score")
+    has_control = not ctl.get("error")
+    reference = ctl["score"] if has_control else flagged
     return {
         **row,
-        "newModel": rep.get("model") or model,
-        "old": old,
-        "new": new,
-        "outcome": outcome(old, new),
-        "oldResponse": case.meta.get("flagged", ""),
+        "newModel": new["model"],
+        "flagged": flagged,
+        "control": ctl.get("score") if has_control else None,
+        "controlError": None if has_control else ctl.get("error"),
+        "new": new["score"],
+        "newScores": new["scores"],
+        "reference": reference,
+        "vs": "control" if has_control else "flagged",
+        "outcome": outcome(reference, new["score"]),
         "oldWhy": base.get("rationale", ""),
-        "newWhy": verdict.get("rationale", ""),
-        "newResponse": response_for(rep, variant),
-        "toolAttempts": rep.get("toolAttempts") or [],
+        "controlResponse": ctl.get("response", ""),
+        "controlWhy": ctl.get("why", ""),
+        "newResponse": new["response"],
+        "newWhy": new["why"],
+        "judgeModel": new.get("judgeModel") or base.get("judgeModel") or judge_model,
+        "toolAttempts": new["toolAttempts"],
         "costUsd": sum(
-            c for c in (base.get("costUsd"), rep.get("costUsd"), verdict.get("costUsd")) if isinstance(c, (int, float))
+            c
+            for c in (base.get("costUsd"), new.get("costUsd"), ctl.get("costUsd"))
+            if isinstance(c, (int, float))
         ),
     }
 
@@ -198,6 +269,8 @@ def run(
     variant: str = "deny",
     workers: int = 8,
     fresh: bool = False,
+    samples: int = 1,
+    control: bool = True,
 ) -> list[dict]:
     target = harness_for_model(model)
     eligible = [c for c in cases if target is None or c.harness == target]
@@ -209,7 +282,9 @@ def run(
             proxy_url = stack.enter_context(SentinelProxy())
         with cf.ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {
-                ex.submit(compare_case, c, model, judge_model, variant, proxy_url, fresh): i
+                ex.submit(
+                    compare_case, c, model, judge_model, variant, proxy_url, fresh, samples, control
+                ): i
                 for i, c in enumerate(eligible)
             }
             for fut in cf.as_completed(futs):

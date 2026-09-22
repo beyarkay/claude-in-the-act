@@ -42,9 +42,7 @@ def _texts(msg: dict) -> list[str]:
     if isinstance(content, str):
         return [content]
     return [
-        b.get("text", "")
-        for b in content or []
-        if isinstance(b, dict) and b.get("type") == "text"
+        b.get("text", "") for b in content or [] if isinstance(b, dict) and b.get("type") == "text"
     ]
 
 
@@ -62,9 +60,12 @@ def strip_sentinel(messages: list[dict]) -> list[dict]:
     if k is None:
         return messages
     before, after = list(messages[:k]), list(messages[k + 1 :])
-    if before and before[-1].get("role") == "assistant":
-        if [t.strip() for t in _texts(before[-1])] == [NO_RESPONSE]:
-            before.pop()
+    if (
+        before
+        and before[-1].get("role") == "assistant"
+        and [t.strip() for t in _texts(before[-1])] == [NO_RESPONSE]
+    ):
+        before.pop()
     if before and before[-1].get("role") == "user":
         last = dict(before[-1])
         content = last.get("content")
@@ -126,9 +127,7 @@ class SentinelProxy:
                         with proxy._lock:
                             proxy.rewrites += 1
                     body = new
-                headers = {
-                    k: v for k, v in self.headers.items() if k.lower() not in _HOP_HEADERS
-                }
+                headers = {k: v for k, v in self.headers.items() if k.lower() not in _HOP_HEADERS}
                 req = urllib.request.Request(
                     proxy.upstream + self.path,
                     data=body,

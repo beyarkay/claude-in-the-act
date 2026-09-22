@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from slash_bad import REPORTS_DIR
@@ -30,25 +30,40 @@ def _color(outcome: str) -> str:
     return {"better": GREEN, "worse": RED, "same": GREY}.get(outcome, RED)
 
 
+def fmt(x: float | None) -> str:
+    if x is None:
+        return "–"
+    return f"{x:.0f}" if float(x).is_integer() else f"{x:.1f}"
+
+
+def _mean(xs: list[float]) -> float | None:
+    return sum(xs) / len(xs) if xs else None
+
+
 def summary(rows: list[dict]) -> dict:
     scored = [r for r in rows if r["outcome"] != "error"]
     counts = Counter(r["outcome"] for r in rows)
-    old = [r["old"] for r in scored]
-    new = [r["new"] for r in scored]
     models = Counter(r.get("newModel") or r["requestedModel"] for r in scored)
     old_models = Counter(r["oldModel"] for r in scored)
+    judges = Counter(r.get("judgeModel") for r in scored if r.get("judgeModel"))
+    with_control = [r for r in scored if r.get("control") is not None]
     return {
         "better": counts["better"],
         "same": counts["same"],
         "worse": counts["worse"],
         "errors": counts["error"],
         "scored": len(scored),
-        "oldMean": sum(old) / len(old) if old else None,
-        "newMean": sum(new) / len(new) if new else None,
+        "flaggedMean": _mean([r["flagged"] for r in scored if r.get("flagged") is not None]),
+        "controlMean": _mean([r["control"] for r in with_control]),
+        "newMean": _mean([r["new"] for r in scored]),
+        "controlled": len(with_control),
         "newModel": models.most_common(1)[0][0] if models else "",
         "oldModels": [m for m, _ in old_models.most_common()],
+        "judge": judges.most_common(1)[0][0] if judges else "",
         "costUsd": sum(r.get("costUsd") or 0 for r in rows),
         "toolTries": sum(1 for r in scored if r.get("toolAttempts")),
+        "selfJudged": bool(judges)
+        and judges.most_common(1)[0][0] == (models.most_common(1)[0][0] if models else None),
     }
 
 
@@ -56,7 +71,7 @@ def _ordered(rows: list[dict]) -> list[dict]:
     rank = {"better": 0, "worse": 1, "same": 2, "error": 3}
     return sorted(
         rows,
-        key=lambda r: (rank[r["outcome"]], -abs((r.get("new") or 0) - (r.get("old") or 0))),
+        key=lambda r: (rank[r["outcome"]], -abs((r.get("new") or 0) - (r.get("reference") or 0))),
     )
 
 
@@ -73,7 +88,8 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
     olds = ", ".join(s["oldModels"]) or "?"
     out = [
         f"{c(BOLD)}slash-bad · your personal benchmark{c(RESET)}",
-        f"{olds} → {c(BOLD)}{s['newModel']}{c(RESET)}   {c(DIM)}judged blind by {judge}{c(RESET)}",
+        f"{olds} → {c(BOLD)}{s['newModel']}{c(RESET)}   "
+        f"{c(DIM)}judged blind by {s['judge'] or judge}{c(RESET)}",
         "",
     ]
     width = max(s["better"], s["same"], s["worse"], 1)
@@ -82,30 +98,45 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
         out.append(f"  {c(_color(key))}{MARK[key]} {label} {s[key]:>3}  {bar}{c(RESET)}")
     if s["errors"]:
         out.append(f"  {c(RED)}✗ errors {s['errors']:>3}{c(RESET)}  (see the report for why)")
-    if s["oldMean"] is not None:
-        delta = s["newMean"] - s["oldMean"]
-        out += [
-            "",
-            f"  mean score {s['oldMean']:.1f} → {s['newMean']:.1f} ({delta:+.1f})"
-            f"   {c(DIM)}10 = your complaint no longer applies{c(RESET)}",
-        ]
-    out += ["", f"{c(BOLD)}per case{c(RESET)}"]
+    if s["newMean"] is not None:
+        out += ["", "  average score, 10 = your complaint no longer applies:"]
+        if s["flaggedMean"] is not None:
+            out.append(f"    {'the responses you flagged':<32} {s['flaggedMean']:.1f}")
+        if s["controlMean"] is not None:
+            out.append(f"    {(olds[:22] + ' again'):<32} {s['controlMean']:.1f}")
+        out.append(f"    {s['newModel'][:32]:<32} {s['newMean']:.1f}")
+    out += [
+        "",
+        f"{c(BOLD)}per case{c(RESET)}  {c(DIM)}flagged · old model again · new model{c(RESET)}",
+    ]
     for r in _ordered(rows):
         mark = f"{c(_color(r['outcome']))}{MARK[r['outcome']]}"
         if r["outcome"] == "error":
             out.append(f"  {mark} error{c(RESET)}  {_one_line(r['complaint'], 70)}")
             out.append(f"      {c(DIM)}{_one_line(r.get('error', ''), 100)}{c(RESET)}")
             continue
-        out.append(
-            f"  {mark} {r['old']:>2} → {r['new']:<2}{c(RESET)} {_one_line(r['complaint'], 80)}"
-        )
+        scores = f"{fmt(r['flagged']):>3} · {fmt(r['control']):>3} · {fmt(r['new']):<3}"
+        out.append(f"  {mark} {scores}{c(RESET)} {_one_line(r['complaint'], 76)}")
         out.append(f"      {c(DIM)}now: {_one_line(r.get('newResponse', ''), 96)}{c(RESET)}")
+    notes = []
+    if s["selfJudged"]:
+        notes.append(
+            f"The judge ({s['judge']}) is the model being tested, and models tend to rate their own "
+            "writing kindly. Pass --judge with a different model for a stricter comparison."
+        )
+    if s["scored"] and s["controlled"] < s["scored"]:
+        notes.append(
+            f"{s['scored'] - s['controlled']} case(s) couldn't re-run the old model, so the new "
+            "model is compared with the flagged response there."
+        )
     if s["toolTries"]:
-        out += [
-            "",
-            f"{c(DIM)}{s['toolTries']} replay(s) tried to call a tool first; the call was refused "
-            f"and the model answered without it.{c(RESET)}",
-        ]
+        notes.append(
+            f"{s['toolTries']} case(s) had the new model try a tool first; the call was refused "
+            "and it answered without it."
+        )
+    if notes:
+        out.append("")
+        out += [f"{c(DIM)}{n}{c(RESET)}" for n in notes]
     return "\n".join(out)
 
 
@@ -116,10 +147,10 @@ FONT = "Inter, 'Helvetica Neue', Helvetica, Arial, sans-serif"
 MONO = "'SF Mono', Menlo, Consolas, monospace"
 
 
-def _t(x, y, text, size, fill=FG, weight=400, anchor="start", family=FONT, extra=""):
+def _t(x, y, text, size, fill=FG, weight=400, anchor="start", family=FONT):
     return (
-        f'<text x="{x}" y="{y}" font-family="{family}" font-size="{size}" '
-        f'font-weight="{weight}" fill="{fill}" text-anchor="{anchor}" {extra}>'
+        f'<text x="{x:.1f}" y="{y:.1f}" font-family="{family}" font-size="{size}" '
+        f'font-weight="{weight}" fill="{fill}" text-anchor="{anchor}">'
         f"{html.escape(str(text))}</text>"
     )
 
@@ -127,6 +158,7 @@ def _t(x, y, text, size, fill=FG, weight=400, anchor="start", family=FONT, extra
 def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
     s = summary(rows)
     olds = ", ".join(s["oldModels"][:2]) + (" …" if len(s["oldModels"]) > 2 else "")
+    vs = "the old model re-run on the same moments" if s["controlled"] else "the flagged responses"
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">',
         f'<rect width="{W}" height="{H}" fill="{BG}"/>',
@@ -136,58 +168,94 @@ def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
         _t(
             64,
             184,
-            f"re-ran {s['scored']} moments where a model annoyed me · judged blind by {judge}",
-            20,
+            f"{s['scored']} moments where a model annoyed me, re-run and judged blind by "
+            f"{s['judge'] or judge}" + (" (itself)" if s["selfJudged"] else ""),
+            18,
             fill=MUTED,
         ),
     ]
     x = 64
-    for key, col, word in (
-        ("better", C_BETTER, "better"),
-        ("same", C_SAME, "same"),
-        ("worse", C_WORSE, "worse"),
-    ):
+    for key, col in (("better", C_BETTER), ("same", C_SAME), ("worse", C_WORSE)):
         parts.append(_t(x, 300, s[key], 96, fill=col, weight=800))
-        parts.append(_t(x + 4, 336, word, 24, fill=col, weight=600))
+        parts.append(_t(x + 4, 336, key, 24, fill=col, weight=600))
         x += 150
-    if s["oldMean"] is not None:
-        parts.append(_t(64, 404, "average score (10 = complaint gone)", 18, fill=MUTED))
-        parts.append(
-            _t(64, 446, f"{s['oldMean']:.1f} → {s['newMean']:.1f}", 36, weight=700)
-        )
+    parts.append(_t(64, 372, f"vs {vs}", 16, fill=MUTED))
+    if s["newMean"] is not None:
+        y = 428
+        parts.append(_t(64, y, "average score (10 = complaint gone)", 18, fill=MUTED))
+        lines = [("flagged", s["flaggedMean"], MUTED)]
+        if s["controlMean"] is not None:
+            lines.append(("old model again", s["controlMean"], C_SAME))
+        lines.append(("new model", s["newMean"], FG))
+        for label, val, col in lines:
+            y += 40
+            parts.append(_t(64, y, f"{val:.1f}", 30, fill=col, weight=700))
+            parts.append(_t(136, y, label, 20, fill=col))
 
-    # Right panel: one slope per case, old score → new score on a 0-10 axis.
     px, pw, top = 560, 576, 236
-    shown = [r for r in _ordered(rows) if r["outcome"] != "error"][:8]
-    parts.append(f'<line x1="{px}" y1="{top - 28}" x2="{px + pw}" y2="{top - 28}" stroke="{LINE}"/>')
-    ax0, ax1 = px + (300 if show_complaints else 40), px + pw - 16
+    shown = [r for r in _ordered(rows) if r["outcome"] != "error"][:7]
+    ax0, ax1 = px + (280 if show_complaints else 40), px + pw - 16
     parts.append(_t(ax0, top - 40, "0", 14, fill=MUTED, anchor="middle"))
     parts.append(_t(ax1, top - 40, "10", 14, fill=MUTED, anchor="middle"))
+    parts.append(
+        f'<line x1="{px}" y1="{top - 28}" x2="{px + pw}" y2="{top - 28}" stroke="{LINE}"/>'
+    )
+
+    def at(v: float) -> float:
+        return ax0 + (ax1 - ax0) * v / 10
+
     for i, r in enumerate(shown):
         y = top + i * 46
         col = {"better": C_BETTER, "worse": C_WORSE}.get(r["outcome"], C_SAME)
         if show_complaints:
-            parts.append(_t(px, y + 6, _one_line(r["complaint"], 30), 16, fill=FG))
-        x_old = ax0 + (ax1 - ax0) * r["old"] / 10
-        x_new = ax0 + (ax1 - ax0) * r["new"] / 10
-        parts.append(f'<line x1="{ax0}" y1="{y}" x2="{ax1}" y2="{y}" stroke="{LINE}" stroke-width="2"/>')
+            parts.append(_t(px, y + 6, _one_line(r["complaint"], 28), 16, fill=FG))
         parts.append(
-            f'<line x1="{x_old}" y1="{y}" x2="{x_new}" y2="{y}" stroke="{col}" stroke-width="4" '
-            f'stroke-linecap="round"/>'
+            f'<line x1="{ax0}" y1="{y}" x2="{ax1}" y2="{y}" stroke="{LINE}" stroke-width="2"/>'
         )
-        parts.append(f'<circle cx="{x_old}" cy="{y}" r="6" fill="{BG}" stroke="{MUTED}" stroke-width="2"/>')
-        parts.append(f'<circle cx="{x_new}" cy="{y}" r="8" fill="{col}"/>')
+        ref = r["reference"]
+        parts.append(
+            f'<line x1="{at(ref):.1f}" y1="{y}" x2="{at(r["new"]):.1f}" y2="{y}" stroke="{col}" '
+            f'stroke-width="4" stroke-linecap="round"/>'
+        )
+        if r.get("flagged") is not None:
+            parts.append(
+                f'<circle cx="{at(r["flagged"]):.1f}" cy="{y}" r="5" fill="{BG}" stroke="{MUTED}" '
+                f'stroke-width="2"/>'
+            )
+        if r.get("control") is not None:
+            cx = at(r["control"])
+            parts.append(
+                f'<rect x="{cx - 6:.1f}" y="{y - 6}" width="12" height="12" fill="{C_SAME}" '
+                f'transform="rotate(45 {cx:.1f} {y})"/>'
+            )
+        parts.append(f'<circle cx="{at(r["new"]):.1f}" cy="{y}" r="8" fill="{col}"/>')
     more = len([r for r in rows if r["outcome"] != "error"]) - len(shown)
+    legend_y = top + len(shown) * 46 + 8
     if more > 0:
-        parts.append(_t(px, top + len(shown) * 46 + 4, f"+ {more} more", 16, fill=MUTED))
-    parts.append(
-        _t(px, H - 96, "○ old response    ● new model's response", 15, fill=MUTED)
-    )
+        parts.append(_t(px, legend_y, f"+ {more} more", 16, fill=MUTED))
+        legend_y += 28
+    legend = "○ flagged   ◆ old model again   ● new model"
+    parts.append(_t(ax0 if show_complaints else px, legend_y, legend, 15, fill=MUTED))
     parts.append(f'<line x1="64" y1="{H - 64}" x2="{W - 64}" y2="{H - 64}" stroke="{LINE}"/>')
     parts.append(
-        _t(64, H - 30, "slash-bad · your personal benchmark for the things you actually care about", 18, fill=MUTED)
+        _t(
+            64,
+            H - 30,
+            "slash-bad · your personal benchmark for the things you actually care about",
+            18,
+            fill=MUTED,
+        )
     )
-    parts.append(_t(W - 64, H - 30, datetime.now(UTC).strftime("%Y-%m-%d"), 18, fill=MUTED, anchor="end"))
+    parts.append(
+        _t(
+            W - 64,
+            H - 30,
+            datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+            18,
+            fill=MUTED,
+            anchor="end",
+        )
+    )
     parts.append("</svg>")
     return "\n".join(parts)
 
@@ -208,20 +276,23 @@ def svg_to_png(svg_path: Path) -> Path | None:
         shutil.which("chromium") or "",
     ):
         if chrome and Path(chrome).exists():
-            proc = subprocess.run(
-                [
-                    chrome,
-                    "--headless",
-                    "--disable-gpu",
-                    "--hide-scrollbars",
-                    f"--window-size={W},{H}",
-                    f"--screenshot={png}",
-                    svg_path.as_uri(),
-                ],
-                capture_output=True,
-                check=False,
-                timeout=60,
-            )
+            try:
+                proc = subprocess.run(
+                    [
+                        chrome,
+                        "--headless",
+                        "--disable-gpu",
+                        "--hide-scrollbars",
+                        f"--window-size={W},{H}",
+                        f"--screenshot={png}",
+                        svg_path.as_uri(),
+                    ],
+                    capture_output=True,
+                    check=False,
+                    timeout=60,
+                )
+            except subprocess.TimeoutExpired:
+                continue
             if proc.returncode == 0 and png.exists():
                 return png
     return None
@@ -236,17 +307,18 @@ _CSS = """
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
        font:16px/1.55 Inter, -apple-system, 'Helvetica Neue', sans-serif; }
-main { max-width: 980px; margin: 0 auto; padding: 32px 16px 80px; }
+main { max-width: 1180px; margin: 0 auto; padding: 32px 16px 80px; }
 h1 { font-size: 28px; margin: 0 0 4px; } .muted { color: var(--muted); }
-.card-img { width: 100%; border-radius: 12px; border: 1px solid var(--line); margin: 24px 0; }
+.card-img { width: 100%; max-width: 900px; border-radius: 12px; border: 1px solid var(--line);
+            margin: 24px 0; display: block; }
 .case { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
         padding: 18px 20px; margin: 16px 0; }
 .case h2 { font-size: 17px; margin: 0 0 12px; display: flex; gap: 12px; align-items: baseline; }
 .pill { font: 600 13px/1 'SF Mono', Menlo, monospace; padding: 5px 8px; border-radius: 999px;
         border: 1px solid currentColor; white-space: nowrap; }
 .better { color: var(--better); } .worse { color: var(--worse); } .same, .error { color: var(--same); }
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
+.cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+@media (max-width: 900px) { .cols { grid-template-columns: 1fr; } }
 .resp { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px;
         overflow: auto; border-left: 3px solid var(--line); padding: 4px 12px; }
 .why { font-size: 13px; color: var(--muted); margin-top: 8px; }
@@ -263,39 +335,56 @@ def html_report(rows: list[dict], judge: str, card_name: str | None) -> str:
         "<meta name='viewport' content='width=device-width, initial-scale=1'>",
         f"<title>slash-bad · {esc(s['newModel'])}</title><style>{_CSS}</style></head><body><main>",
         f"<h1>{esc(', '.join(s['oldModels']))} → {esc(s['newModel'])}</h1>",
-        f"<div class='muted'>{s['better']} better · {s['same']} same · {s['worse']} worse"
-        f"{errors}"
-        f" · judged blind by {esc(judge)} · ${s['costUsd']:.2f}</div>",
+        f"<div class='muted'>{s['better']} better · {s['same']} same · {s['worse']} worse{errors}"
+        f" · judged blind by {esc(s['judge'] or judge)} · ${s['costUsd']:.2f}</div>",
     ]
     if card_name:
         parts.append(f"<img class='card-img' src='{esc(card_name)}' alt='scorecard'>")
     for r in _ordered(rows):
         o = r["outcome"]
-        score = f"{r.get('old')} → {r.get('new')}" if o != "error" else "error"
+        score = f"{fmt(r.get('reference'))} → {fmt(r.get('new'))}" if o != "error" else "error"
         parts.append(f"<section class='case'><h2><span class='pill {o}'>{MARK[o]} {score}</span>")
         parts.append(f"<span>{esc(r['complaint'])}</span></h2>")
         if o == "error":
             parts.append(f"<div class='why'>{esc(r.get('error', ''))}</div></section>")
             continue
-        parts.append("<div class='cols'><div>")
-        parts.append(f"<div class='label'>original · {esc(r['oldModel'])} · {r['old']}/10</div>")
-        parts.append(f"<div class='resp'>{esc(r.get('oldResponse', ''))}</div>")
-        parts.append(f"<div class='why'>{esc(r.get('oldWhy', ''))}</div></div><div>")
-        parts.append(
-            f"<div class='label'>replay · {esc(r.get('newModel', ''))} · {r['new']}/10</div>"
-        )
-        parts.append(f"<div class='resp'>{esc(r.get('newResponse', ''))}</div>")
+        parts.append("<div class='cols'>")
+        for label, model, val, resp, why in (
+            ("flagged", r["oldModel"], r.get("flagged"), r.get("oldResponse"), r.get("oldWhy")),
+            (
+                "old model again",
+                r["oldModel"],
+                r.get("control"),
+                r.get("controlResponse"),
+                r.get("controlWhy") or r.get("controlError"),
+            ),
+            (
+                "new model",
+                r.get("newModel", ""),
+                r.get("new"),
+                r.get("newResponse"),
+                r.get("newWhy"),
+            ),
+        ):
+            parts.append(
+                f"<div><div class='label'>{label} · {esc(model or '')} · {fmt(val)}/10</div>"
+            )
+            parts.append(f"<div class='resp'>{esc(resp or '')}</div>")
+            parts.append(f"<div class='why'>{esc(why or '')}</div></div>")
+        parts.append("</div>")
         if r.get("toolAttempts"):
             tried = "; ".join(_one_line(t, 80) for t in r["toolAttempts"][:3])
-            parts.append(f"<div class='why'>tried tools first (refused): {esc(tried)}</div>")
-        parts.append(f"<div class='why'>{esc(r.get('newWhy', ''))}</div></div></div></section>")
+            parts.append(
+                f"<div class='why'>the new model tried tools first (refused): {esc(tried)}</div>"
+            )
+        parts.append("</section>")
     parts.append("</main></body></html>")
     return "\n".join(parts)
 
 
 def write_all(rows: list[dict], judge: str, show_complaints: bool = True) -> dict[str, Path]:
     s = summary(rows)
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     safe = "".join(ch if ch.isalnum() or ch in "-._" else "-" for ch in s["newModel"] or "model")
     base = REPORTS_DIR / f"{stamp}-{safe}"
     base.parent.mkdir(parents=True, exist_ok=True)

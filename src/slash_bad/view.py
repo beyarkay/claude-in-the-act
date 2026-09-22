@@ -65,9 +65,7 @@ def render(steps: list[dict]) -> str:
         elif kind == "tool_call":
             out.append(f"<tool-call>\n{clip(text, TOOL_CALL_CAP)}\n</tool-call>")
         elif kind == "tool_result":
-            out.append(
-                f"<tool-result>\n{clip(text, TOOL_RESULT_CAP)}\n</tool-result>"
-            )
+            out.append(f"<tool-result>\n{clip(text, TOOL_RESULT_CAP)}\n</tool-result>")
     return "\n".join(out)
 
 

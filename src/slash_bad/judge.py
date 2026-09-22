@@ -174,7 +174,12 @@ def score(
     else:
         raw, cost, info = _run_claude(prompt, judge)
     if not raw:
-        return {"score": None, "rationale": f"judge failed: {info}", "judgeModel": judge, "costUsd": cost}
+        return {
+            "score": None,
+            "rationale": f"judge failed: {info}",
+            "judgeModel": judge,
+            "costUsd": cost,
+        }
     value, rationale = parse_verdict(raw)
     return {
         "score": value,

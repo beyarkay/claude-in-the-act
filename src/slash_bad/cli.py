@@ -1,11 +1,11 @@
 """``slash-bad``: your personal benchmark for the things you actually care about.
 
-    slash-bad list                         your saved cases
-    slash-bad show 3                       one case in full
-    slash-bad compare latest               re-run every case on the newest model
-    slash-bad compare claude-opus-5-5 --judge opus
-    slash-bad capture SESSION.jsonl "it said the tests pass but never ran them"
-    slash-bad share --dry-run              preview the anonymised upload
+slash-bad list                         your saved cases
+slash-bad show 3                       one case in full
+slash-bad compare latest               re-run every case on the newest model
+slash-bad compare claude-opus-5-5 --judge opus
+slash-bad capture SESSION.jsonl "it said the tests pass but never ran them"
+slash-bad share --dry-run              preview the anonymised upload
 """
 
 from __future__ import annotations
@@ -46,9 +46,13 @@ def cmd_show(args) -> int:
     print(f"\n<flagged-response>\n{case.meta.get('flagged')}\n</flagged-response>\n")
     for r in case.results():
         if r.get("kind") == "verdict":
-            print(f"verdict [{r.get('target')}] {r.get('score')}/10 by {r.get('judgeModel')}: {r.get('rationale')}")
+            print(
+                f"verdict [{r.get('target')}] {r.get('score')}/10 by {r.get('judgeModel')}: {r.get('rationale')}"
+            )
         elif r.get("kind") == "replay":
-            print(f"replay [{r.get('replayId')}] {r.get('model')}: {(r.get('text') or r.get('error') or '')[:300]!r}")
+            print(
+                f"replay [{r.get('replayId')}] {r.get('model')}: {(r.get('text') or r.get('error') or '')[:300]!r}"
+            )
     return 0
 
 
@@ -82,7 +86,9 @@ def cmd_compare(args) -> int:
     judge_model = args.judge or cfg.get("judge") or judge.DEFAULT_JUDGE
     cases = _selected(args.cases)
     if not cases:
-        print(f"no cases in {CASES_DIR} yet — flag one with /bad <what went wrong>", file=sys.stderr)
+        print(
+            f"no cases in {CASES_DIR} yet — flag one with /bad <what went wrong>", file=sys.stderr
+        )
         return 1
     rows = compare.run(
         cases,
@@ -91,6 +97,8 @@ def cmd_compare(args) -> int:
         variant=args.variant,
         workers=args.workers,
         fresh=args.fresh,
+        samples=args.samples,
+        control=not args.no_control,
     )
     if not rows:
         print(f"no cases can run on {args.model} (wrong harness?)", file=sys.stderr)
@@ -139,7 +147,9 @@ def cmd_import_legacy(args) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(prog="slash-bad", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        prog="slash-bad", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("list", help="list saved cases").set_defaults(fn=cmd_list)
@@ -162,7 +172,10 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("compare", help="re-run your cases on a model and score the change")
     p.add_argument("model", help="e.g. latest, claude-opus-5-5, sonnet, gpt-6-sol")
     p.add_argument("cases", nargs="*", help="case ids or list numbers (default: all)")
-    p.add_argument("--judge", help=f"judge model (default {judge.DEFAULT_JUDGE}; codex:<model> to judge with Codex)")
+    p.add_argument(
+        "--judge",
+        help=f"judge model (default {judge.DEFAULT_JUDGE}; codex:<model> to judge with Codex)",
+    )
     p.add_argument(
         "--variant",
         choices=("deny", "stop"),
@@ -170,9 +183,21 @@ def main(argv: list[str] | None = None) -> int:
         help="deny: refuse the new model's tool calls and judge what it says next; "
         "stop: judge its first message, tool calls included",
     )
+    p.add_argument(
+        "--samples", type=int, default=1, help="re-runs per model per case, averaged (default 1)"
+    )
+    p.add_argument(
+        "--no-control",
+        action="store_true",
+        help="skip re-running the old model; compare with the flagged response instead (cheaper, flatters the new model)",
+    )
     p.add_argument("--workers", type=int, default=8)
-    p.add_argument("--fresh", action="store_true", help="re-run replays instead of reusing cached ones")
-    p.add_argument("--hide-complaints", action="store_true", help="leave complaint text off the share card")
+    p.add_argument(
+        "--fresh", action="store_true", help="re-run replays instead of reusing cached ones"
+    )
+    p.add_argument(
+        "--hide-complaints", action="store_true", help="leave complaint text off the share card"
+    )
     p.add_argument("--open", action="store_true", help="open the HTML report when done")
     p.set_defaults(fn=cmd_compare)
 
@@ -186,13 +211,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("value", nargs="?")
     p.set_defaults(fn=cmd_config)
 
-    p = sub.add_parser("share", help="anonymise cases and open a pull request on the shared Hugging Face dataset")
+    p = sub.add_parser(
+        "share", help="anonymise cases and open a pull request on the shared Hugging Face dataset"
+    )
     p.add_argument("cases", nargs="*")
-    p.add_argument("--dry-run", action="store_true", help="write the anonymised files locally and stop")
+    p.add_argument(
+        "--dry-run", action="store_true", help="write the anonymised files locally and stop"
+    )
     p.add_argument("--yes", action="store_true", help="skip the confirmation prompt")
     p.add_argument("--repo", default="beyarkay/slash-bad")
     p.add_argument("--redact", default="", help="extra comma-separated strings to redact")
-    p.add_argument("--direct", action="store_true", help="commit directly instead of opening a pull request (repo owners)")
+    p.add_argument(
+        "--direct",
+        action="store_true",
+        help="commit directly instead of opening a pull request (repo owners)",
+    )
     p.set_defaults(fn=cmd_share)
 
     p = sub.add_parser("import-legacy", help="import captures from claude-in-the-act")

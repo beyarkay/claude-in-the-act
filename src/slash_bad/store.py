@@ -17,18 +17,18 @@ import json
 import os
 import secrets
 import tempfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from slash_bad import CASES_DIR
 
 
 def now_iso() -> str:
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def new_case_id() -> str:
-    return datetime.now(UTC).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-") + secrets.token_hex(3)
 
 
 def read_jsonl(path: Path) -> list[dict]:
@@ -65,9 +65,7 @@ class Case:
         self.meta: dict = json.loads((path / "case.json").read_text())
 
     @classmethod
-    def create(
-        cls, meta: dict, context: list[dict], root: Path | None = None
-    ) -> Case:
+    def create(cls, meta: dict, context: list[dict], root: Path | None = None) -> Case:
         root = root or CASES_DIR
         case_id = meta.get("id") or new_case_id()
         path = root / case_id

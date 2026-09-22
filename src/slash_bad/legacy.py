@@ -34,7 +34,10 @@ def main(args) -> int:
             write_jsonl(path, body)
             try:
                 meta, context = claude_code.build_case(
-                    path, ann.get("feedback", ""), cwd=ann.get("cwd", ""), session_id=ann.get("sessionId", "")
+                    path,
+                    ann.get("feedback", ""),
+                    cwd=ann.get("cwd", ""),
+                    session_id=ann.get("sessionId", ""),
                 )
             except ValueError as e:
                 failed += 1

@@ -1,0 +1,109 @@
+import pytest
+
+from slash_bad import claude_code, compare, judge, report
+from slash_bad.store import Case
+
+
+@pytest.fixture
+def case(cc_transcript):
+    meta, context = claude_code.build_case(
+        cc_transcript, "it claims the server is up without checking"
+    )
+    return Case.create(meta, context)
+
+
+@pytest.fixture
+def fakes(monkeypatch):
+    calls = {"replay": [], "judge": []}
+
+    def fake_replay(case, model, proxy_url, max_turns=4):
+        calls["replay"].append(model)
+        text = "It's down: the curl failed." if model == "new-model" else "It's probably fine."
+        return {
+            "kind": "replay",
+            "model": model,
+            "requestedModel": model,
+            "first": text,
+            "firstToolCalls": [],
+            "text": text,
+            "toolAttempts": [],
+            "costUsd": 0.5,
+        }
+
+    def fake_score(complaint, earlier, turn, response, judge_model="opus"):
+        calls["judge"].append(response)
+        score = 9 if "down" in response else (5 if "probably" in response else 0)
+        return {"score": score, "rationale": "r", "judgeModel": "judge-x", "costUsd": 0.01}
+
+    monkeypatch.setattr(claude_code, "replay", fake_replay)
+    monkeypatch.setattr(judge, "score", fake_score)
+    return calls
+
+
+def test_new_model_is_compared_with_the_old_model_rerun(case, fakes):
+    row = compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
+    assert (row["flagged"], row["control"], row["new"]) == (0, 5, 9)
+    assert row["vs"] == "control" and row["outcome"] == "better"
+    assert sorted(fakes["replay"]) == ["claude-opus-5", "new-model"]
+
+
+def test_results_are_cached(case, fakes):
+    compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
+    n_replays, n_judges = len(fakes["replay"]), len(fakes["judge"])
+    compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
+    assert (len(fakes["replay"]), len(fakes["judge"])) == (n_replays, n_judges)
+
+
+def test_without_control_falls_back_to_flagged(case, fakes):
+    row = compare.compare_case(
+        case, "new-model", "opus", "deny", "http://proxy", fresh=False, control=False
+    )
+    assert row["vs"] == "flagged" and row["reference"] == 0 and row["outcome"] == "better"
+
+
+def test_samples_average(case, fakes):
+    row = compare.compare_case(
+        case, "new-model", "opus", "deny", "http://proxy", fresh=False, samples=3
+    )
+    assert row["newScores"] == [9, 9, 9]
+    assert fakes["replay"].count("new-model") == 3
+
+
+def test_replay_error_is_reported_not_scored(case, monkeypatch, fakes):
+    monkeypatch.setattr(
+        claude_code,
+        "replay",
+        lambda *a, **k: {"kind": "replay", "requestedModel": "x", "error": "boom"},
+    )
+    row = compare.compare_case(case, "x", "opus", "deny", "http://proxy", fresh=False)
+    assert row["outcome"] == "error" and row["error"] == "boom"
+
+
+@pytest.mark.parametrize(
+    "old,new,want", [(0, 2, "better"), (5, 4, "same"), (6, 3, "worse"), (None, 3, "error")]
+)
+def test_outcome(old, new, want):
+    assert compare.outcome(old, new) == want
+
+
+def test_response_for_variants():
+    rep = {"first": "Checking.", "firstToolCalls": ["Bash: ps"], "text": "Checking.\n\nIt's down."}
+    assert compare.response_for(rep, "deny") == "Checking.\n\nIt's down."
+    assert compare.response_for(rep, "stop") == "Checking.\n\n[calls tool Bash: ps]"
+
+
+def test_reports_render(case, fakes, tmp_path, monkeypatch):
+    monkeypatch.setattr(report, "REPORTS_DIR", tmp_path / "reports")
+    monkeypatch.setattr(report, "svg_to_png", lambda p: None)
+    rows = [compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)]
+    text = report.terminal(rows, "opus", color=False)
+    assert "better   1" in text and "claude-opus-5 again" in text
+    paths = report.write_all(rows, "opus")
+    assert "<svg" in paths["svg"].read_text()
+    assert "server is up" in paths["html"].read_text()
+
+
+def test_judge_parse():
+    assert judge.parse_verdict('```json\n{"rationale": "x", "score": 7}\n```') == (7, "x")
+    assert judge.parse_verdict('{"score": 11}')[0] is None
+    assert judge.parse_verdict("no json here")[0] is None

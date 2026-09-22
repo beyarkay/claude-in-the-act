@@ -18,7 +18,7 @@ from slash_bad import REPLAY_ENV, claude_code, codex
 from slash_bad.store import Case, all_cases
 
 _TRIGGER = re.compile(
-    r"^\s*(?:(?:/|\$)(?:slash-bad:)?(?P<cmd>bad(?:-list)?)\b|(?P<legacy>BAD:))\s*(?P<rest>.*)",
+    r"^\s*(?:(?:/|\$)(?:slash-bad:)?(?P<cmd>bad(?:-list)?)(?=\s|$)|(?P<legacy>BAD:))\s*(?P<rest>.*)",
     re.DOTALL,
 )
 
@@ -80,7 +80,10 @@ def handle(payload: dict) -> tuple[int, str]:
     if cmd == "bad-list":
         return 2, list_text()
     if not rest:
-        return 2, "slash-bad: say what went wrong, e.g. /bad it said the tests pass but never ran them"
+        return (
+            2,
+            "slash-bad: say what went wrong, e.g. /bad it said the tests pass but never ran them",
+        )
     try:
         return 2, capture(payload, rest)
     except Exception as e:  # noqa: BLE001 — never let a capture bug leak the prompt through

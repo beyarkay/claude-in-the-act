@@ -3,7 +3,7 @@ name = "slash-bad"
 version = "0.2.0"
 description = "Your personal benchmark for the things you actually care about: /bad in Claude Code and Codex"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 license = "MIT"
 dependencies = []  # stdlib only at runtime
 
@@ -26,3 +26,11 @@ addopts = "-m 'not e2e'"
 markers = [
     "e2e: end-to-end tests that spawn the real `claude` CLI (cost money + network; opt in with `-m e2e`)",
 ]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "PLW1510", "BLE"]
+ignore = ["E501", "UP007", "UP045"]

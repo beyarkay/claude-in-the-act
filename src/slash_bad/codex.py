@@ -16,12 +16,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
-import tomllib
 import uuid
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from slash_bad import REPLAY_ENV
@@ -31,8 +31,7 @@ from slash_bad.view import as_text, tool_call_text
 HARNESS = "codex"
 CODEX_TIMEOUT = 900
 DENY_REASON = (
-    "Permission denied: the user has turned off tool use for this reply. "
-    "Continue without tools."
+    "Permission denied: the user has turned off tool use for this reply. Continue without tools."
 )
 # Harness-injected "user" messages that the user never typed.
 _INJECTED = (
@@ -103,7 +102,11 @@ def steps(recs: list[dict]) -> list[dict]:
             out.append({"kind": "tool_result", "text": as_text(output)})
         elif kind == "web_search_call":
             out.append(
-                {"kind": "tool_call", "name": "web_search", "text": tool_call_text("web_search", item.get("action"))}
+                {
+                    "kind": "tool_call",
+                    "name": "web_search",
+                    "text": tool_call_text("web_search", item.get("action")),
+                }
             )
     return out
 
@@ -169,10 +172,14 @@ def build_case(
 
 
 def _user_config() -> dict:
+    """Top-level string settings from config.toml (enough for the model and
+    effort, and it keeps the hook working on Python 3.9, which lacks tomllib)."""
     try:
-        return tomllib.loads((codex_home() / "config.toml").read_text())
-    except (OSError, tomllib.TOMLDecodeError):
+        text = (codex_home() / "config.toml").read_text()
+    except OSError:
         return {}
+    head = re.split(r"(?m)^\s*\[", text, maxsplit=1)[0]
+    return dict(re.findall(r'(?m)^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"([^"]*)"', head))
 
 
 def default_model() -> str:
@@ -184,7 +191,9 @@ def _comp_hash(model: str) -> str | None:
         cache = json.loads((codex_home() / "models_cache.json").read_text())
     except (OSError, json.JSONDecodeError):
         return None
-    return next((m.get("comp_hash") for m in cache.get("models", []) if m.get("slug") == model), None)
+    return next(
+        (m.get("comp_hash") for m in cache.get("models", []) if m.get("slug") == model), None
+    )
 
 
 def prepare_rollout(context: list[dict], old_id: str, new_id: str, model: str) -> list[dict]:
@@ -194,7 +203,11 @@ def prepare_rollout(context: list[dict], old_id: str, new_id: str, model: str) -
     for r in context:
         if r.get("type") == "token_usage_record" or _item(r).get("type") == "reasoning":
             continue
-        r = json.loads(json.dumps(r).replace(old_id, new_id)) if old_id else json.loads(json.dumps(r))
+        r = (
+            json.loads(json.dumps(r).replace(old_id, new_id))
+            if old_id
+            else json.loads(json.dumps(r))
+        )
         p = r.get("payload") or {}
         if r.get("type") == "turn_context":
             p["model"] = model
@@ -238,11 +251,15 @@ def replay(case: Case, model: str, max_seconds: int = CODEX_TIMEOUT) -> dict:
     )
     (home / "hooks.json").write_text(
         json.dumps(
-            {"hooks": {"PreToolUse": [{"hooks": [{"type": "command", "command": f"cat '{deny}'"}]}]}}
+            {
+                "hooks": {
+                    "PreToolUse": [{"hooks": [{"type": "command", "command": f"cat '{deny}'"}]}]
+                }
+            }
         )
     )
     new_id = str(uuid.uuid4())
-    now = datetime.now(UTC)
+    now = datetime.now(timezone.utc)
     day = home / "sessions" / now.strftime("%Y/%m/%d")
     day.mkdir(parents=True)
     rollout = day / f"rollout-{now.strftime('%Y-%m-%dT%H-%M-%S')}-{new_id}.jsonl"

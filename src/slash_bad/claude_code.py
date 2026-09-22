@@ -9,6 +9,7 @@ information the old one had.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -27,8 +28,7 @@ HARNESS = "claude-code"
 SYNTHETIC_MODEL = "<synthetic>"
 CLAUDE_TIMEOUT = 900
 DENY_REASON = (
-    "Permission denied: the user has turned off tool use for this reply. "
-    "Continue without tools."
+    "Permission denied: the user has turned off tool use for this reply. Continue without tools."
 )
 
 
@@ -171,12 +171,8 @@ def build_case(
         "flagged": sp["flagged"],
         "model": sp["model"],
         "cwd": cwd,
-        "sessionId": session_id or next(
-            (r["sessionId"] for r in recs if r.get("sessionId")), ""
-        ),
-        "harnessVersion": next(
-            (r["version"] for r in reversed(context) if r.get("version")), ""
-        ),
+        "sessionId": session_id or next((r["sessionId"] for r in recs if r.get("sessionId")), ""),
+        "harnessVersion": next((r["version"] for r in reversed(context) if r.get("version")), ""),
         "git": {
             "sha": _git(cwd, "rev-parse", "HEAD") if cwd else None,
             "branch": _git(cwd, "rev-parse", "--abbrev-ref", "HEAD") if cwd else None,
@@ -282,10 +278,8 @@ def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
     finally:
         planted.unlink(missing_ok=True)
         if created_proj:
-            try:
+            with contextlib.suppress(OSError):
                 proj.rmdir()
-            except OSError:
-                pass
         shutil.rmtree(tmp, ignore_errors=True)
 
     try:
@@ -310,7 +304,11 @@ def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
 def parse_replay(new: list[dict]) -> dict:
     """Pull the regenerated message(s) out of the records a replay appended."""
     start = next(
-        (i for i, r in enumerate(new) if r.get("type") == "user" and SENTINEL in as_text(_content(r))),
+        (
+            i
+            for i, r in enumerate(new)
+            if r.get("type") == "user" and SENTINEL in as_text(_content(r))
+        ),
         None,
     )
     tail = new[start + 1 :] if start is not None else new
@@ -332,9 +330,7 @@ def parse_replay(new: list[dict]) -> dict:
                 if is_first:
                     first_tools.append(call)
     return {
-        "model": next(
-            ((r.get("message") or {}).get("model") for r in assistants), ""
-        ),
+        "model": next(((r.get("message") or {}).get("model") for r in assistants), ""),
         "first": "\n\n".join(first_text),
         "firstToolCalls": first_tools,
         "text": "\n\n".join(all_text),
