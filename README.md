@@ -34,8 +34,8 @@ codex plugin marketplace add beyarkay/claude-in-the-act
 codex plugin add slash-bad@slash-bad
 ```
 
-Start Codex and approve the two slash-bad hooks when it asks (or later, with
-`/hooks`).
+Start Codex and approve the slash-bad hooks when it asks (or later, with
+`/hooks`). Codex asks again whenever an update adds a hook.
 
 **Or ask your agent.** Paste this into Claude Code or Codex:
 
@@ -55,10 +55,20 @@ use your existing `claude` or `codex` login.
 | `/bad <what went wrong>` | `$bad <what went wrong>` | save the last response as a case |
 | `/bad-list` | `$bad-list` | list your cases |
 | `/bad-compare <model>` | `$bad-compare <model>` | replay every case on `<model>` and score it |
+| `/bad-mine` | `$bad-mine` | find bad moments in past sessions you never flagged |
 | `/bad-share` | `$bad-share` | anonymise your cases and contribute them to the public dataset |
 
 `/bad` and `/bad-list` are handled by a hook before the prompt reaches the
-model, so they cost nothing and don't add a turn to your conversation.
+model, so they cost nothing and don't add a turn to your conversation. If you
+type `/bad` while the agent is still working, it's saved too (flagging the answer
+you'd just read), but the agent will see the line and is told to ignore it.
+
+**Starting from nothing?** Run `/bad-mine`. It reads every Claude Code and
+Codex session on your machine for moments you reacted to ("wtf", "that's not
+what I asked") and for the stock phrases agents overuse ("You're right", "worth
+knowing"), has a model decide which ones are real failures, and saves those as
+cases tagged `mined`, using your own `/bad` complaints to learn what you dislike.
+Delete any you disagree with with `slash-bad delete <id>`.
 
 Be specific in the complaint; it becomes the grading rubric. "too wordy" works,
 but `claude says "all tests pass" but it only ran test_utils.py` works better.
@@ -70,6 +80,16 @@ model for Codex cases. You can name any model the harness accepts:
 It prints a scoresheet and writes three files to `~/.slash-bad/reports/`: a
 1200×675 PNG card for sharing, the same card as SVG, and an HTML report with
 every response side by side.
+
+Cases are grouped by the behaviour they complain about ("praises the user",
+"claims things it didn't check", "unexplained jargon"), so the result reads as
+"better on 4 behaviours I care about, same on 3" rather than a list of
+transcripts. `slash-bad behaviours` shows the groups; the labels stick to each
+case, and new cases are slotted into the existing groups.
+
+In Codex, `$bad-compare` has to run outside the sandbox (it starts `codex` and
+needs the network), so Codex will ask you to approve that. If your Codex setup
+has automatic approval review, it may ask you to confirm in plain words first.
 
 ## How the comparison works
 
@@ -95,10 +115,18 @@ original or a replay, and never sees two responses at once, so every score sits
 on the same scale. It judges whether the behaviour happened, not whether you
 were entitled to object.
 
-The default judge is the latest Opus. Change it per run with `--judge sonnet`,
-or permanently with `slash-bad config judge sonnet`; `--judge codex:gpt-6-luna`
-judges with Codex. When the judge is also the model under test, the scoresheet
-warns you, because models tend to rate their own writing kindly.
+The default judge is the latest Opus, or Codex's default model if you only have
+Codex. Change it per run with `--judge sonnet`, or permanently with
+`slash-bad config judge sonnet`; `--judge codex:gpt-6-luna` judges with Codex.
+Grouping and mining use the same model. When the judge is also the model under
+test, the scoresheet warns you, because models tend to rate their own writing
+kindly. Cases that the model under test wrote itself are skipped.
+
+People often complain about something said a little earlier than the last
+message. When the judge can't find the complaint in the flagged message, it
+checks the agent's earlier messages in the same turn and moves the case to the
+one that matches. If none does, the case is skipped and listed as such, because
+replaying the wrong message would measure nothing.
 
 ### What gets replayed
 
@@ -124,14 +152,20 @@ insists on a new user message before it will continue, so slash-bad sends a
 placeholder through a small local proxy (`ANTHROPIC_BASE_URL`), which deletes it
 before the request reaches Anthropic. The model sees exactly the stored
 conversation and nothing extra. In Codex the replay resumes the saved session
-with an empty user message, which is the closest Codex allows.
+with an empty user message, which is the closest Codex allows, after rewriting
+it to claim the new model throughout; otherwise Codex compacts the whole history
+into a summary before the new model sees it. A Codex replay that still compacts
+is reported as an error, not scored.
 
 ### Limits
 
-- A complaint about something earlier in the turn, like a destructive command or
-  a pointless tool call, can't be tested: that part of the conversation is
-  replayed as it happened. slash-bad assumes the complaint is about the last
-  message.
+- A complaint about something the agent *did*, like a destructive command or a
+  pointless tool call, can't be tested: tool calls before the flagged message
+  are replayed exactly as they happened. Complaints about what it *said* work.
+- When the new model reaches for a tool, the refusal sometimes shows in its
+  answer ("tools are off for this reply, so…"). This happens to the old model's
+  re-run just as often, so the comparison stays fair, but it does soften claims
+  the model might otherwise have made.
 - One re-run per model is noisy. `--samples 3` averages three re-runs of each
   model, at three times the cost.
 - A replay costs about as much as one turn of the original session: the
@@ -172,6 +206,9 @@ uvx --from git+https://github.com/beyarkay/claude-in-the-act slash-bad --help
 slash-bad list
 slash-bad show 3
 slash-bad compare latest --judge sonnet --samples 2
+slash-bad compare latest --origin flagged   # only cases you flagged yourself
+slash-bad mine --dry-run          # what mining would add
+slash-bad behaviours              # your cases, grouped by behaviour
 slash-bad baseline                # judge only the flagged responses (cheap)
 slash-bad capture SESSION.jsonl "complaint"   # save a case from any transcript
 slash-bad share --dry-run
@@ -187,8 +224,8 @@ verdict). Set `SLASH_BAD_HOME` to keep them somewhere else.
 ### Why `/bad` needs a skill
 
 Claude Code prefixes plugin commands with the plugin name (`/slash-bad:bad`) and
-rejects an unknown `/bad` before any hook runs. So the plugin installs four
-small skills (`bad`, `bad-list`, `bad-compare`, `bad-share`) into
+rejects an unknown `/bad` before any hook runs. So the plugin installs five
+small skills (`bad`, `bad-list`, `bad-compare`, `bad-mine`, `bad-share`) into
 `~/.claude/skills` and `~/.codex/skills` when a session starts. It only ever
 touches files it created, and `slash-bad uninstall` removes them.
 
