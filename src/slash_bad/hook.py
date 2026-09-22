@@ -49,16 +49,22 @@ def list_text() -> str:
     return "\n".join(lines)
 
 
-def capture(payload: dict, complaint: str) -> str:
+def capture(
+    payload: dict, complaint: str, upto: int | None = None, extra: dict | None = None
+) -> str:
     harness = detect_harness(payload)
     mod = codex if harness == "codex" else claude_code
     transcript = Path(payload.get("transcript_path") or "")
     if not transcript.is_file():
         return f"slash-bad: couldn't find the session transcript ({transcript}); nothing saved."
     meta, context = mod.build_case(
-        transcript, complaint, cwd=payload.get("cwd", ""), session_id=payload.get("session_id", "")
+        transcript,
+        complaint,
+        cwd=payload.get("cwd", ""),
+        session_id=payload.get("session_id", ""),
+        upto=upto,
     )
-    case = Case.create({**meta, "source": str(transcript)}, context)
+    case = Case.create({**meta, "source": str(transcript), **(extra or {})}, context)
     n = len(all_cases())
     flagged = " ".join(meta["flagged"].split())
     return (
@@ -91,10 +97,56 @@ def handle(payload: dict) -> tuple[int, str]:
         return 2, f"slash-bad: capture failed ({type(e).__name__}: {e}); nothing saved."
 
 
+def queued_flags(recs: list[dict]) -> list[tuple[int, str, str]]:
+    """``(index, key, complaint)`` for each ``/bad`` the user typed while the agent
+    was busy. Claude Code delivers those mid-turn without running
+    UserPromptSubmit hooks, but logs an ``enqueue`` record at the moment of typing,
+    so the flagged message is the last one before that record."""
+    out = []
+    for i, r in enumerate(recs):
+        if r.get("type") != "queue-operation" or r.get("operation") != "enqueue":
+            continue
+        parsed = parse(r.get("content") or "")
+        if parsed and parsed[0] == "bad" and parsed[1]:
+            out.append((i, f"{r.get('timestamp')}|{r.get('content')}", parsed[1]))
+    return out
+
+
+def handle_stop(payload: dict) -> str:
+    """Stop hook: save any ``/bad`` that arrived mid-turn and wasn't captured."""
+    if os.environ.get(REPLAY_ENV) or detect_harness(payload) != "claude-code":
+        return ""
+    transcript = Path(payload.get("transcript_path") or "")
+    if not transcript.is_file():
+        return ""
+    flags = queued_flags(claude_code.read_jsonl(transcript))
+    done = {c.meta.get("queuedKey") for c in all_cases()}
+    messages = []
+    for idx, key, complaint in flags:
+        if key in done:
+            continue
+        try:
+            messages.append(capture(payload, complaint, upto=idx, extra={"queuedKey": key}))
+        except Exception as e:  # noqa: BLE001 — a Stop hook must never break the session
+            messages.append(f"slash-bad: couldn't save a queued /bad ({type(e).__name__}: {e})")
+    return "\n".join(messages)
+
+
 def main() -> int:
     try:
         payload = json.load(sys.stdin)
     except json.JSONDecodeError:
+        return 0
+    if payload.get("hook_event_name") == "Stop":
+        if msg := handle_stop(payload):
+            print(
+                json.dumps(
+                    {
+                        "systemMessage": msg
+                        + "\n  (you typed /bad while the agent was busy, so it saw the line too)"
+                    }
+                )
+            )
         return 0
     code, msg = handle(payload)
     if msg:

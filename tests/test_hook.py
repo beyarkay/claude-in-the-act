@@ -80,3 +80,27 @@ def test_shell_gate_skips_python_for_ordinary_prompts(tmp_path):
     )
     assert flagged.returncode == 2
     assert "couldn't find the session transcript" in flagged.stderr
+
+
+def test_queued_bad_is_captured_once_at_the_moment_it_was_typed(tmp_path):
+    from conftest import cc_assistant, cc_user
+
+    recs = [
+        cc_user("summarise"),
+        cc_assistant([{"type": "text", "text": "You're right, here it is."}], "m1"),
+        {
+            "type": "queue-operation",
+            "operation": "enqueue",
+            "timestamp": "t1",
+            "content": "/bad don't say you're right",
+        },
+        cc_assistant([{"type": "text", "text": "Later message."}], "m2"),
+    ]
+    path = tmp_path / "s.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    payload = {"hook_event_name": "Stop", "transcript_path": str(path), "session_id": "s1"}
+    assert "saved case" in hook.handle_stop(payload)
+    (case,) = all_cases()
+    assert case.meta["flagged"] == "You're right, here it is."
+    assert case.complaint == "don't say you're right"
+    assert hook.handle_stop(payload) == ""

@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Stop: pick up any /bad typed while the agent was busy. Cheap grep first.
+set -uo pipefail
+input=$(cat)
+re='"transcript_path"[[:space:]]*:[[:space:]]*"([^"]+)"'
+[[ "$input" =~ $re ]] || exit 0
+transcript="${BASH_REMATCH[1]}"
+grep -qE '"operation":"enqueue".*"content":"[[:space:]]*[/$](slash-bad:)?bad ' "$transcript" 2>/dev/null || exit 0
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+for py in python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+  if command -v "$py" >/dev/null 2>&1 &&
+    "$py" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
+    exec env PYTHONPATH="$root/src" "$py" -m slash_bad.hook <<<"$input"
+  fi
+done
+exit 0

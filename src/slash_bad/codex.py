@@ -142,9 +142,15 @@ def split(recs: list[dict]) -> dict:
 
 
 def build_case(
-    transcript: Path, complaint: str, cwd: str = "", session_id: str = ""
+    transcript: Path,
+    complaint: str,
+    cwd: str = "",
+    session_id: str = "",
+    upto: int | None = None,
 ) -> tuple[dict, list[dict]]:
     recs = read_jsonl(transcript)
+    if upto is not None:
+        recs = recs[:upto]
     sp = split(recs)
     context = recs[: sp["cut"]]
     st = steps(context)

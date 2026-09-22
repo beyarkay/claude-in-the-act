@@ -134,9 +134,12 @@ with an empty user message, which is the closest Codex allows.
   message.
 - One re-run per model is noisy. `--samples 3` averages three re-runs of each
   model, at three times the cost.
-- A replay costs about as much as one turn of the original session. For Opus in
-  Claude Code that's roughly $0.50 per case per model, mostly from reading the
-  harness's 70k-token system prompt. Replays and verdicts are cached, so running
+- A replay costs about as much as one turn of the original session: the
+  harness's 70k-token system prompt plus the conversation so far. At API prices
+  that's $0.35 to $0.50 for a short session on Opus, and a few dollars for a
+  long one. On a Claude or ChatGPT subscription it comes out of your plan's usage
+  instead of your wallet, since replays and judging use the same login as your
+  agent; with an API key it's billed. Replays and verdicts are cached, so running
   a comparison again, or with a different judge, only pays for what's missing.
 - Replays see your current CLAUDE.md and harness version, not the ones from the
   day you flagged the case.

@@ -157,10 +157,17 @@ def claude_version() -> str:
 
 
 def build_case(
-    transcript: Path, complaint: str, cwd: str = "", session_id: str = ""
+    transcript: Path,
+    complaint: str,
+    cwd: str = "",
+    session_id: str = "",
+    upto: int | None = None,
 ) -> tuple[dict, list[dict]]:
-    """``(meta, context)`` for a new case from a session transcript."""
+    """``(meta, context)`` for a new case from a session transcript. With
+    ``upto``, the flagged message is the last one before record ``upto``."""
     recs = read_jsonl(transcript)
+    if upto is not None:
+        recs = recs[:upto]
     sp = split(recs)
     context = recs[: sp["cut"]]
     st = steps(context)
