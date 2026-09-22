@@ -45,22 +45,29 @@ def test_non_interactive_sessions_are_skipped(tmp_path, monkeypatch):
     assert mine.scan() == []
 
 
-def test_select_caps_phrase_finds_but_not_reactions():
-    def cand(i, signal, mode="praise for the user"):
+def test_select_caps_each_stock_phrase_whatever_the_signal():
+    def cand(i, signal, text="You're right, fixed."):
         return {
             "key": str(i),
             "signal": signal,
-            "verdict": {"failure": True, "confidence": 0.9, "mode": mode},
+            "assistant": text,
+            "verdict": {"failure": True, "confidence": 0.9, "mode": f"mode {i}"},
         }
 
     judged = [cand(i, "phrase:you're right") for i in range(10)]
-    judged += [cand(100 + i, "reaction") for i in range(8)]
+    judged += [cand(100 + i, "reaction") for i in range(4)]
+    judged += [cand(200 + i, "reaction", "The fabex rate is 0.3.") for i in range(8)]
     judged.append(
-        {"key": "low", "signal": "reaction", "verdict": {"failure": True, "confidence": 0.5}}
+        {
+            "key": "low",
+            "signal": "reaction",
+            "assistant": "x",
+            "verdict": {"failure": True, "confidence": 0.5},
+        }
     )
     chosen = mine.select(judged)
-    assert sum(c["signal"] == "reaction" for c in chosen) == 8
-    assert sum(c["signal"] != "reaction" for c in chosen) == mine.PER_MODE_CAP
+    assert sum("right" in c["assistant"] for c in chosen) == mine.PER_MODE_CAP
+    assert sum("fabex" in c["assistant"] for c in chosen) == 8
 
 
 def test_save_cuts_at_the_flagged_message_and_tags_it(tmp_path, monkeypatch):

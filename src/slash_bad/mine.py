@@ -31,6 +31,7 @@ from slash_bad import HOME, REPLAY_ENV, claude_code, codex
 from slash_bad.store import Case, all_cases
 
 DEFAULT_MODEL = "sonnet"
+PROMPT_VERSION = 2  # verdicts from another version are not reused
 MIN_CONFIDENCE = 0.7
 PER_MODE_CAP = 6  # stock-phrase finds per failure mode, so one habit can't swamp the set
 
@@ -69,6 +70,8 @@ What this user objects to, in their own words from earlier complaints:
 <user-next-message>
 {reaction}
 </user-next-message>
+
+<their-complaints> tell you this user's taste; they were written about OTHER sessions. Don't claim the user told the agent anything unless <user-request> shows it.
 
 Decide whether <agent-message> ITSELF contains something this user would object to. Most agent messages are fine; say false unless the problem is plainly visible in the text of <agent-message>. Frustration in the user's next message may be about the task, a tool, or an earlier message, so it is a hint, not proof. A passing use of a common phrase counts only if it is the kind of thing this user complains about.
 
@@ -238,7 +241,8 @@ def triage(cands: list[dict], model: str, workers: int = 12, progress=None) -> l
     if cache_path.exists():
         for line in cache_path.read_text().splitlines():
             r = json.loads(line)
-            cache[r["key"]] = r["verdict"]
+            if r.get("v") == PROMPT_VERSION:
+                cache[r["key"]] = r["verdict"]
     their_taste = taste()
     todo = [c for c in cands if c["key"] not in cache]
 
@@ -255,7 +259,7 @@ def triage(cands: list[dict], model: str, workers: int = 12, progress=None) -> l
     with cf.ThreadPoolExecutor(workers) as ex, cache_path.open("a") as f:
         for n, (key, verdict) in enumerate(ex.map(one, todo), 1):
             if verdict.get("failure") is not None:
-                f.write(json.dumps({"key": key, "verdict": verdict}) + "\n")
+                f.write(json.dumps({"key": key, "v": PROMPT_VERSION, "verdict": verdict}) + "\n")
                 f.flush()
             cache[key] = verdict
             if progress:
@@ -264,15 +268,17 @@ def triage(cands: list[dict], model: str, workers: int = 12, progress=None) -> l
 
 
 def select(judged: list[dict]) -> list[dict]:
-    keep, per_mode = [], {}
+    """Confident failures, at most ``PER_MODE_CAP`` per stock phrase: the model
+    names one habit many ways, so the cap keys on the phrase actually in the text."""
+    keep, per_phrase = [], {}
     for c in sorted(judged, key=lambda c: -(c["verdict"].get("confidence") or 0)):
         v = c["verdict"]
         if not v.get("failure") or (v.get("confidence") or 0) < MIN_CONFIDENCE:
             continue
-        if c["signal"] != "reaction":
-            mode = " ".join((v.get("mode") or "").lower().split()[:3])
-            per_mode[mode] = per_mode.get(mode, 0) + 1
-            if per_mode[mode] > PER_MODE_CAP:
+        if m := STOCK.search(c["assistant"]):
+            phrase = m.group(0).lower().replace("’", "'")
+            per_phrase[phrase] = per_phrase.get(phrase, 0) + 1
+            if per_phrase[phrase] > PER_MODE_CAP:
                 continue
         keep.append(c)
     return keep
