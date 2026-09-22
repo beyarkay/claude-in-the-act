@@ -43,8 +43,8 @@ def _mean(xs: list[float]) -> float | None:
 def summary(rows: list[dict]) -> dict:
     scored = [r for r in rows if r["outcome"] != "error"]
     counts = Counter(r["outcome"] for r in rows)
-    models = Counter(r.get("newModel") or r["requestedModel"] for r in scored)
-    old_models = Counter(r["oldModel"] for r in scored)
+    models = Counter(r.get("newModel") or r["requestedModel"] for r in scored or rows)
+    old_models = Counter(r["oldModel"] for r in scored or rows)
     judges = Counter(r.get("judgeModel") for r in scored if r.get("judgeModel"))
     with_control = [r for r in scored if r.get("control") is not None]
     return {

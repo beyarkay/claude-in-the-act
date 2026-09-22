@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# SessionStart: (re)install the short /bad skills when the plugin has moved.
+set -uo pipefail
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+stamp="${SLASH_BAD_HOME:-$HOME/.slash-bad}/installed-from"
+[[ -f "$stamp" && "$(cat "$stamp")" == "$root" ]] && exit 0
+"$root/bin/slash-bad" setup --quiet >/dev/null 2>&1 || exit 0
+mkdir -p "$(dirname "$stamp")" && printf '%s' "$root" >"$stamp"
+exit 0

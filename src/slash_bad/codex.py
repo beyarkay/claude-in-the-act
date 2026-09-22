@@ -203,11 +203,9 @@ def prepare_rollout(context: list[dict], old_id: str, new_id: str, model: str) -
     for r in context:
         if r.get("type") == "token_usage_record" or _item(r).get("type") == "reasoning":
             continue
-        r = (
-            json.loads(json.dumps(r).replace(old_id, new_id))
-            if old_id
-            else json.loads(json.dumps(r))
-        )
+        text = json.dumps(r)
+        # Only a real id is safe to substitute textually; a short one would hit prose.
+        r = json.loads(text.replace(old_id, new_id) if len(old_id) >= 32 else text)
         p = r.get("payload") or {}
         if r.get("type") == "turn_context":
             p["model"] = model
@@ -277,8 +275,8 @@ def replay(case: Case, model: str, max_seconds: int = CODEX_TIMEOUT) -> dict:
         model,
         "--skip-git-repo-check",
         "--dangerously-bypass-hook-trust",
-        "-s",
-        "read-only",
+        "-c",
+        'sandbox_mode="read-only"',
         "--json",
     ]
     env = {**os.environ, "CODEX_HOME": str(home), REPLAY_ENV: "1"}

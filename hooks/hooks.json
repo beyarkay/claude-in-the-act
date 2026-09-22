@@ -1,9 +1,16 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/slash-bad-setup\"", "timeout": 30 }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/slash-bad-hook\"", "timeout": 30 }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/slash-bad-hook\"", "timeout": 60 }
         ]
       }
     ]

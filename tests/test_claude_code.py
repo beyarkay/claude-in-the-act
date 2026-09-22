@@ -1,3 +1,5 @@
+import json
+
 from conftest import cc_assistant, cc_tool_result, cc_user
 
 from slash_bad import claude_code
@@ -64,3 +66,10 @@ def test_parse_replay_separates_first_message_from_later_prose():
     assert out["first"] == "Let me check."
     assert out["firstToolCalls"] == ["Bash: ps"]
     assert out["text"] == "Let me check.\n\nI can't check, so I don't know."
+
+
+def test_plant_text_sets_the_id_without_touching_content(cc_transcript):
+    _, context = claude_code.build_case(cc_transcript, "c", session_id="x")
+    planted = [json.loads(line) for line in claude_code.plant_text(context, "NEW").splitlines()]
+    assert {r["sessionId"] for r in planted if "sessionId" in r} == {"NEW"}
+    assert [r.get("message") for r in planted] == [r.get("message") for r in context]

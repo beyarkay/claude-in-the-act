@@ -1,12 +1,31 @@
 #!/usr/bin/env bash
 # Runs on every prompt, so the common case is a pure-bash check with no Python.
-set -euo pipefail
+set -uo pipefail
 input=$(cat)
 re='"prompt"[[:space:]]*:[[:space:]]*"[[:space:]]*([/$](slash-bad:)?bad|BAD: )'
 [[ "$input" =~ $re ]] || exit 0
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "slash-bad: python3 (3.11+) not found, so nothing was saved." >&2
+py=""
+for cand in python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3; do
+  if command -v "$cand" >/dev/null 2>&1 &&
+    "$cand" -c 'import sys; sys.exit(sys.version_info < (3, 9))' 2>/dev/null; then
+    py="$cand"
+    break
+  fi
+done
+if [[ -z "$py" ]]; then
+  echo "slash-bad: needs Python 3.9 or newer on PATH, so nothing was saved." >&2
   exit 2
 fi
-exec env PYTHONPATH="$root/src" python3 -m slash_bad.hook <<<"$input"
+log="${SLASH_BAD_HOME:-$HOME/.slash-bad}/hook-error.log"
+err=$(env PYTHONPATH="$root/src" "$py" -m slash_bad.hook <<<"$input" 2>&1 >/dev/null)
+code=$?
+if [[ $code -eq 0 || $code -eq 2 ]]; then
+  [[ -n "$err" ]] && printf '%s\n' "$err" >&2
+  exit "$code"
+fi
+# Any crash must still block the prompt, or "/bad …" leaks through to the model.
+mkdir -p "$(dirname "$log")"
+{ date; printf '%s\n' "$err"; } >>"$log"
+echo "slash-bad: capture crashed, nothing saved (details in $log)" >&2
+exit 2

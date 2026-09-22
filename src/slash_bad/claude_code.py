@@ -218,6 +218,14 @@ def _deny_settings(tmp: Path) -> str:
     )
 
 
+def plant_text(context: list[dict], sid: str) -> str:
+    """The context as a session file under a new id (set per record, never by
+    text substitution, so the id can't collide with anything in the prose)."""
+    return "".join(
+        json.dumps({**r, "sessionId": sid} if "sessionId" in r else r) + "\n" for r in context
+    )
+
+
 def resolve_model(model: str) -> str:
     return "opus" if model in ("latest", "") else model
 
@@ -236,12 +244,8 @@ def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
     proj.mkdir(parents=True, exist_ok=True)
     sid = str(uuid.uuid4())
     planted = proj / f"{sid}.jsonl"
-    old_sid = case.meta.get("sessionId") or ""
     context = case.context
-    text = "".join(json.dumps(r) + "\n" for r in context)
-    if old_sid:
-        text = text.replace(old_sid, sid)
-    planted.write_text(text)
+    planted.write_text(plant_text(context, sid))
 
     cmd = [
         "claude",

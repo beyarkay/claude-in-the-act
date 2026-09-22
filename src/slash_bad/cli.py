@@ -134,6 +134,26 @@ def cmd_config(args) -> int:
     return 0
 
 
+def cmd_setup(args) -> int:
+    from slash_bad import setup
+
+    root = Path(__file__).resolve().parents[2]
+    written = setup.install(root)
+    if not args.quiet:
+        for path in written:
+            print(f"installed {path}")
+        print("Type /bad <what went wrong> in Claude Code, or $bad in Codex.")
+    return 0
+
+
+def cmd_uninstall(args) -> int:
+    from slash_bad import setup
+
+    for path in setup.uninstall():
+        print(f"removed {path}")
+    return 0
+
+
 def cmd_share(args) -> int:
     from slash_bad import share
 
@@ -231,6 +251,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("import-legacy", help="import captures from claude-in-the-act")
     p.add_argument("dir", nargs="?", default=str(Path.home() / ".claude/claude-in-the-act/data"))
     p.set_defaults(fn=cmd_import_legacy)
+
+    p = sub.add_parser("setup", help="install the short /bad, /bad-compare, … skills")
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(fn=cmd_setup)
+
+    sub.add_parser("uninstall", help="remove the skills `setup` installed").set_defaults(
+        fn=cmd_uninstall
+    )
 
     sub.add_parser("hook", help=argparse.SUPPRESS).set_defaults(fn=lambda a: hook.main())
 
