@@ -12,19 +12,11 @@ from their settings, hooks, CLAUDE.md and tools.
 
 from __future__ import annotations
 
-import json
-import os
-import subprocess
-import tempfile
-from pathlib import Path
-
-from slash_bad import REPLAY_ENV
+from slash_bad import llm
 from slash_bad.view import clip
 
-DEFAULT_JUDGE = "opus"
 # Bump when the rubric changes; verdicts from another rubric are never compared.
 RUBRIC = "blind-v4"
-JUDGE_TIMEOUT = 600
 
 SYSTEM = (
     "You are a strict, calibrated judge of AI coding-assistant responses. You "
@@ -75,13 +67,8 @@ def build_prompt(complaint: str, earlier: str, turn: str, response: str) -> str:
 
 
 def parse_verdict(raw: str) -> tuple[int | None, str]:
-    text = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```")
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1:
-        return None, f"unparseable judge output: {raw[:200]!r}"
-    try:
-        obj = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
+    obj = llm.parse_json(raw)
+    if obj is None:
         return None, f"unparseable judge output: {raw[:200]!r}"
     score = obj.get("score")
     if isinstance(score, bool) or not isinstance(score, (int, float)):
@@ -90,91 +77,11 @@ def parse_verdict(raw: str) -> tuple[int | None, str]:
     return (score if 0 <= score <= 10 else None), obj.get("rationale") or ""
 
 
-def _run_claude(prompt: str, model: str) -> tuple[str, float | None, str]:
-    with tempfile.TemporaryDirectory(prefix="slash-bad-judge-") as cwd:
-        try:
-            proc = subprocess.run(
-                [
-                    "claude",
-                    "-p",
-                    "--model",
-                    model,
-                    "--system-prompt",
-                    SYSTEM,
-                    "--tools",
-                    "",
-                    "--setting-sources",
-                    "",
-                    "--strict-mcp-config",
-                    "--no-session-persistence",
-                    "--output-format",
-                    "json",
-                ],
-                input=prompt,
-                cwd=cwd,
-                env={**os.environ, REPLAY_ENV: "1"},
-                capture_output=True,
-                text=True,
-                timeout=JUDGE_TIMEOUT,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return "", None, "judge timed out"
-    try:
-        out = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        return "", None, (proc.stderr or proc.stdout)[-300:]
-    resolved = next(iter(out.get("modelUsage") or {}), model)
-    if out.get("is_error"):
-        return "", out.get("total_cost_usd"), str(out.get("result"))[-300:]
-    return out.get("result") or "", out.get("total_cost_usd"), resolved
-
-
-def _run_codex(prompt: str, model: str) -> tuple[str, float | None, str]:
-    with tempfile.TemporaryDirectory(prefix="slash-bad-judge-") as cwd:
-        out_file = Path(cwd) / "out.txt"
-        cmd = [
-            "codex",
-            "exec",
-            "--ephemeral",
-            "--skip-git-repo-check",
-            "-C",
-            cwd,
-            "-s",
-            "read-only",
-            "-o",
-            str(out_file),
-        ]
-        if model:
-            cmd += ["-m", model]
-        try:
-            proc = subprocess.run(
-                [*cmd, SYSTEM + "\n\n" + prompt],
-                cwd=cwd,
-                env={**os.environ, REPLAY_ENV: "1"},
-                capture_output=True,
-                text=True,
-                timeout=JUDGE_TIMEOUT,
-                stdin=subprocess.DEVNULL,
-                check=False,
-            )
-        except subprocess.TimeoutExpired:
-            return "", None, "judge timed out"
-        if proc.returncode != 0 or not out_file.exists():
-            return "", None, proc.stderr[-300:]
-        return out_file.read_text(), None, model or "codex-default"
-
-
-def score(
-    complaint: str, earlier: str, turn: str, response: str, judge: str = DEFAULT_JUDGE
-) -> dict:
+def score(complaint: str, earlier: str, turn: str, response: str, judge: str = "opus") -> dict:
     """One judge call. ``judge`` is a Claude model (``opus``, ``claude-opus-5-5``)
     or ``codex:<model>`` to judge with Codex instead."""
     prompt = build_prompt(complaint, earlier, turn, response)
-    if judge.startswith("codex:"):
-        raw, cost, info = _run_codex(prompt, judge.removeprefix("codex:"))
-    else:
-        raw, cost, info = _run_claude(prompt, judge)
+    raw, cost, info = llm.ask(prompt, judge, SYSTEM)
     if not raw:
         return {
             "score": None,

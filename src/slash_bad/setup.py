@@ -22,6 +22,12 @@ HOOK_MISSING = (
     "approve the slash-bad hook in `/hooks`."
 )
 
+OUTSIDE_SANDBOX = (
+    " It needs network access and starts `claude` or `codex` itself, so if your commands "
+    "run in a sandbox (as in Codex), run it outside the sandbox from the start: request "
+    "escalated permissions for this command rather than retrying after it fails."
+)
+
 SKILLS = {
     "bad": {
         "description": "Flag the previous response as bad and save it to your slash-bad "
@@ -44,7 +50,9 @@ SKILLS = {
             "If no model was given, use `latest`. It re-samples every saved case on the new "
             "model and on the old one and has a blind judge score them, so it takes several "
             "minutes and spends tokens: run it in the background if you can, with a timeout "
-            "of at least 30 minutes. When it finishes, show the scoresheet it printed "
+            "of at least 30 minutes."
+            + OUTSIDE_SANDBOX
+            + " When it finishes, show the scoresheet it printed "
             "verbatim in a code block, then the paths of the PNG card and the HTML report. "
             "Don't add commentary on the results unless asked."
         ),
@@ -56,7 +64,7 @@ SKILLS = {
         "body": (
             "Run this with the shell tool, in the background if you can (it reads every "
             "session on this machine and asks a model about each candidate, so it takes a "
-            "few minutes):\n\n"
+            "few minutes)." + OUTSIDE_SANDBOX + "\n\n"
             "    {cli} mine $ARGUMENTS\n\n"
             "Show the user its output verbatim. Mention that `/bad-list` shows the new cases "
             "(tagged mined) and `slash-bad delete <id>` removes any they disagree with."
@@ -73,7 +81,7 @@ SKILLS = {
             "anonymised copies were written. Tell them to read those files, because code, "
             "file contents and project names are not removed automatically. Only if the user "
             "then explicitly says to go ahead, run the same command with `--yes` instead of "
-            "`--dry-run`, and show them the pull request link it prints."
+            "`--dry-run`, and show them the pull request link it prints." + OUTSIDE_SANDBOX
         ),
     },
 }

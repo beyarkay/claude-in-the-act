@@ -22,15 +22,12 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
-from slash_bad import HOME, REPLAY_ENV, claude_code, codex
+from slash_bad import HOME, REPLAY_ENV, claude_code, codex, llm
 from slash_bad.store import Case, all_cases
 
-DEFAULT_MODEL = "sonnet"
 PROMPT_VERSION = 2  # verdicts from another version are not reused
 MIN_CONFIDENCE = 0.7
 PER_MODE_CAP = 6  # stock-phrase finds per failure mode, so one habit can't swamp the set
@@ -201,37 +198,7 @@ def taste() -> str:
 
 
 def _ask(prompt: str, model: str) -> dict:
-    with tempfile.TemporaryDirectory(prefix="slash-bad-mine-") as cwd:
-        proc = subprocess.run(
-            [
-                "claude",
-                "-p",
-                "--model",
-                model,
-                "--system-prompt",
-                "You answer with a single JSON object.",
-                "--tools",
-                "",
-                "--setting-sources",
-                "",
-                "--strict-mcp-config",
-                "--no-session-persistence",
-                "--output-format",
-                "json",
-            ],
-            input=prompt,
-            cwd=cwd,
-            env={**os.environ, REPLAY_ENV: "1"},
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
-    try:
-        raw = json.loads(proc.stdout).get("result", "")
-        return json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
-    except (json.JSONDecodeError, ValueError, AttributeError):
-        return {"failure": None}
+    return llm.ask_json(prompt, model) or {"failure": None}
 
 
 def triage(cands: list[dict], model: str, workers: int = 12, progress=None) -> list[dict]:
@@ -321,12 +288,19 @@ def _bar(label: str):
     return draw
 
 
+def _judge_default() -> str:
+    from slash_bad.cli import load_config
+
+    return load_config().get("judge") or llm.default_model()
+
+
 def main(args) -> int:
     cands = scan(progress=_bar("scanning sessions"))
     print(f"{len(cands)} candidate moments", file=sys.stderr)
     if args.limit:
         cands = cands[-args.limit :]
-    judged = triage(cands, args.model, progress=_bar("reading them"))
+    model = args.model or _judge_default()
+    judged = triage(cands, model, progress=_bar("reading them"))
     chosen = select(judged)
     print(f"{len(chosen)} look like real failures (confidence ≥ {MIN_CONFIDENCE})")
     for c in chosen[:15]:

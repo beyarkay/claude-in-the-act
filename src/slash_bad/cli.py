@@ -16,7 +16,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from slash_bad import CASES_DIR, HOME, claude_code, codex, compare, hook, judge, report
+from slash_bad import CASES_DIR, HOME, claude_code, codex, compare, hook, llm, report
 from slash_bad.store import Case, all_cases, find_case
 
 CONFIG = HOME / "config.json"
@@ -86,8 +86,8 @@ def _selected(refs: list[str], origin: str = "all") -> list[Case]:
 
 def cmd_compare(args) -> int:
     cfg = load_config()
-    judge_model = args.judge or cfg.get("judge") or judge.DEFAULT_JUDGE
-    cases = _selected(args.cases)
+    judge_model = args.judge or cfg.get("judge") or llm.default_model()
+    cases = _selected(args.cases, args.origin)
     if not cases:
         print(
             f"no cases in {CASES_DIR} yet — flag one with /bad <what went wrong>", file=sys.stderr
@@ -97,7 +97,7 @@ def cmd_compare(args) -> int:
         from slash_bad import behaviours
 
         try:
-            behaviours.assign(cases)
+            behaviours.assign(cases, judge_model)
         except RuntimeError as e:
             print(
                 f"slash-bad: couldn't group cases by behaviour ({e}); continuing", file=sys.stderr
@@ -129,7 +129,7 @@ def cmd_compare(args) -> int:
 
 def cmd_baseline(args) -> int:
     cfg = load_config()
-    judge_model = args.judge or cfg.get("judge") or judge.DEFAULT_JUDGE
+    judge_model = args.judge or cfg.get("judge") or llm.default_model()
     cases = _selected(args.cases)
     for case in cases:
         v = compare.baseline(case, judge_model)
@@ -141,7 +141,8 @@ def cmd_behaviours(args) -> int:
     from slash_bad import behaviours
 
     cases = all_cases()
-    labels = behaviours.assign(cases, regroup=args.regroup)
+    model = load_config().get("judge") or llm.default_model()
+    labels = behaviours.assign(cases, model, regroup=args.regroup)
     for b in behaviours.load():
         members = [c for c in cases if labels.get(c.id) == b["name"]]
         if not members:
@@ -228,7 +229,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("cases", nargs="*", help="case ids or list numbers (default: all)")
     p.add_argument(
         "--judge",
-        help=f"judge model (default {judge.DEFAULT_JUDGE}; codex:<model> to judge with Codex)",
+        help="judge model (default: latest Opus via Claude Code, or Codex's default model if "
+        "only Codex is installed; codex:<model> judges with Codex)",
     )
     p.add_argument(
         "--variant",
@@ -283,7 +285,9 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("mine", help="find bad moments in past sessions you never flagged")
     p.add_argument("--dry-run", action="store_true", help="show what it finds without saving")
-    p.add_argument("--model", default="sonnet", help="model that reads the candidates")
+    p.add_argument(
+        "--model", default=None, help="model that reads the candidates (default: the judge)"
+    )
     p.add_argument("--limit", type=int, default=0, help="only read the N most recent candidates")
     p.set_defaults(fn=cmd_mine)
 

@@ -11,14 +11,10 @@ fits), so adding a case never reshuffles the rest. ``regroup`` starts over.
 from __future__ import annotations
 
 import json
-import os
-import subprocess
-import tempfile
 
-from slash_bad import HOME, REPLAY_ENV
+from slash_bad import HOME, llm
 from slash_bad.store import Case
 
-DEFAULT_MODEL = "sonnet"
 FILE_NAME = "behaviours.json"
 
 _PROMPT = """Below are complaints a user wrote about responses from their AI coding agent, one per line, each with an id.
@@ -51,40 +47,13 @@ def _save(behaviours: list[dict]) -> None:
 
 
 def _ask(prompt: str, model: str) -> dict:
-    with tempfile.TemporaryDirectory(prefix="slash-bad-group-") as cwd:
-        proc = subprocess.run(
-            [
-                "claude",
-                "-p",
-                "--model",
-                model,
-                "--system-prompt",
-                "You answer with a single JSON object.",
-                "--tools",
-                "",
-                "--setting-sources",
-                "",
-                "--strict-mcp-config",
-                "--no-session-persistence",
-                "--output-format",
-                "json",
-            ],
-            input=prompt,
-            cwd=cwd,
-            env={**os.environ, REPLAY_ENV: "1"},
-            capture_output=True,
-            text=True,
-            timeout=600,
-            check=False,
-        )
-    try:
-        raw = json.loads(proc.stdout).get("result", "")
-        return json.loads(raw[raw.find("{") : raw.rfind("}") + 1])
-    except (json.JSONDecodeError, ValueError, AttributeError) as e:
-        raise RuntimeError(f"grouping failed: {(proc.stderr or proc.stdout)[-300:]}") from e
+    out = llm.ask_json(prompt, model)
+    if out is None:
+        raise RuntimeError(f"grouping with {model} returned nothing usable")
+    return out
 
 
-def assign(cases: list[Case], model: str = DEFAULT_MODEL, regroup: bool = False) -> dict[str, str]:
+def assign(cases: list[Case], model: str, regroup: bool = False) -> dict[str, str]:
     """``{case id: behaviour}``, asking the model only about unlabelled cases."""
     known = [] if regroup else load()
     todo = [c for c in cases if regroup or not c.meta.get("behaviour")]

@@ -278,7 +278,7 @@ class Progress:
 def run(
     cases: list[Case],
     model: str,
-    judge_model: str = judge.DEFAULT_JUDGE,
+    judge_model: str = "opus",
     variant: str = "deny",
     workers: int = 8,
     fresh: bool = False,
