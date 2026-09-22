@@ -110,6 +110,26 @@ def _one_line(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def headline(rows: list[dict]) -> str:
+    """One sentence you could post."""
+    s = summary(rows)
+    gs = groups(rows)
+    olds = " and ".join(s["oldModels"][:2]) or "the old model"
+    if len(gs) >= 2:
+        n = Counter(g["outcome"] for g in gs)
+        unit, total = "behaviours I care about", len(gs)
+    else:
+        n = Counter(r["outcome"] for r in rows if r["outcome"] not in SKIPPED)
+        unit, total = "moments that annoyed me", s["scored"]
+    parts = [f"better on {n['better']}"]
+    if n["same"]:
+        parts.append(f"the same on {n['same']}")
+    if n["worse"]:
+        parts.append(f"worse on {n['worse']}")
+    joined = ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1]
+    return f"According to slash-bad, {s['newModel']} is {joined} of the {total} {unit}, compared with {olds}."
+
+
 def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
     if color is None:
         color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
@@ -191,6 +211,8 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
     if notes:
         out.append("")
         out += [f"{c(DIM)}{n}{c(RESET)}" for n in notes]
+    if s["scored"]:
+        out += ["", f"{c(BOLD)}{headline(rows)}{c(RESET)}"]
     return "\n".join(out)
 
 
@@ -395,6 +417,7 @@ def html_report(rows: list[dict], judge: str, card_name: str | None) -> str:
         "<meta name='viewport' content='width=device-width, initial-scale=1'>",
         f"<title>slash-bad · {esc(s['newModel'])}</title><style>{_CSS}</style></head><body><main>",
         f"<h1>{esc(', '.join(s['oldModels']))} → {esc(s['newModel'])}</h1>",
+        f"<p>{esc(headline(rows)) if s['scored'] else ''}</p>",
         f"<div class='muted'>{s['better']} better · {s['same']} same · {s['worse']} worse{errors}"
         f" · judged blind by {esc(s['judge'] or judge)} · ${s['costUsd']:.2f}</div>",
     ]

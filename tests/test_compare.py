@@ -153,3 +153,11 @@ def test_a_case_from_the_model_under_test_is_skipped(case, fakes):
     row = compare.compare_case(case, "claude-opus-5", "opus", "deny", "http://proxy", fresh=False)
     assert row["outcome"] == "same-model"
     assert fakes["replay"] == []
+
+
+def test_headline_reads_as_a_sentence(case, fakes):
+    rows = [compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)]
+    assert report.headline(rows) == (
+        "According to slash-bad, new-model is better on 1 of the 1 moments that annoyed me, "
+        "compared with claude-opus-5."
+    )
