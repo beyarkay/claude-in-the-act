@@ -48,3 +48,38 @@ def test_images_are_removed():
     r = red()
     out = r.value({"content": [{"type": "image", "source": {"type": "base64", "data": "AAAA"}}]})
     assert out == {"content": [{"type": "text", "text": "[image removed]"}]}
+
+
+def test_tokens_inside_words_are_not_secrets():
+    r = red()
+    s = "/tmp/claude-task-5475f656-a473-48f6-9ef7-a1435f8a4ecb.txt and risk-assessment-matrix-2026-final"
+    assert r.text(s) == s
+
+
+def test_instruction_files_are_dropped(tmp_path):
+    import json
+
+    from slash_bad.redact import redact_case_dir
+
+    recs = [
+        {
+            "type": "attachment",
+            "attachment": {"type": "instructions", "files": [{"content": "secret rules"}]},
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "# AGENTS.md instructions for /x\nprivate"}
+                ],
+            },
+        },
+        {"type": "user", "message": {"role": "user", "content": "keep me"}},
+    ]
+    (tmp_path / "case.json").write_text(json.dumps({"complaint": "c"}))
+    (tmp_path / "context.jsonl").write_text("".join(json.dumps(r) + "\n" for r in recs))
+    out = redact_case_dir(tmp_path, red())
+    assert [r["type"] for r in out["context"]] == ["user"]
+    assert len(redact_case_dir(tmp_path, red(), keep_instructions=True)["context"]) == 3

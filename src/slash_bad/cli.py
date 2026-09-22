@@ -242,6 +242,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--repo", default="beyarkay/slash-bad")
     p.add_argument("--redact", default="", help="extra comma-separated strings to redact")
     p.add_argument(
+        "--keep-instructions",
+        action="store_true",
+        help="include your CLAUDE.md / AGENTS.md text (dropped by default)",
+    )
+    p.add_argument(
         "--direct",
         action="store_true",
         help="commit directly instead of opening a pull request (repo owners)",

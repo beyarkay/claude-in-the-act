@@ -78,11 +78,13 @@ def _verdicts(case: Case) -> list[dict]:
     return out
 
 
-def build_files(cases: list[Case], redactor: Redactor) -> dict[str, bytes]:
+def build_files(
+    cases: list[Case], redactor: Redactor, keep_instructions: bool = False
+) -> dict[str, bytes]:
     files: dict[str, bytes] = {}
     for case in cases:
         sid = share_id(case)
-        red = redact_case_dir(case.path, redactor)
+        red = redact_case_dir(case.path, redactor, keep_instructions)
         meta = red["meta"]
         steps = HARNESSES[case.harness].steps(red["context"])
         row = {
@@ -144,7 +146,7 @@ def main(args) -> int:
         print("no cases to share", file=sys.stderr)
         return 1
     redactor = Redactor([s.strip() for s in args.redact.split(",") if s.strip()])
-    files = build_files(cases, redactor)
+    files = build_files(cases, redactor, args.keep_instructions)
     too_big = [p for p, d in files.items() if len(d) > MAX_FILE_BYTES]
     preview = HOME / "share-preview"
     for path, data in files.items():

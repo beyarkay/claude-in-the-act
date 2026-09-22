@@ -19,23 +19,23 @@ from pathlib import Path
 
 SECRET_PATTERNS: list[tuple[str, str]] = [
     (r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----", "private-key"),
-    (r"sk-ant-[A-Za-z0-9_\-]{20,}", "anthropic-key"),
-    (r"sk-(?:proj-|svcacct-)?[A-Za-z0-9_\-]{20,}", "openai-key"),
-    (r"hf_[A-Za-z0-9]{30,}", "huggingface-token"),
-    (r"(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}", "github-token"),
-    (r"github_pat_[A-Za-z0-9_]{40,}", "github-token"),
-    (r"glpat-[A-Za-z0-9_\-]{20,}", "gitlab-token"),
-    (r"(?:AKIA|ASIA)[0-9A-Z]{16}", "aws-key"),
-    (r"xox[abprs]-[A-Za-z0-9\-]{10,}", "slack-token"),
+    (r"(?<![A-Za-z0-9_\-])sk-ant-[A-Za-z0-9_\-]{20,}", "anthropic-key"),
+    (r"(?<![A-Za-z0-9_\-])sk-(?:proj-|svcacct-)?[A-Za-z0-9_\-]{20,}", "openai-key"),
+    (r"(?<![A-Za-z0-9_\-])hf_[A-Za-z0-9]{30,}", "huggingface-token"),
+    (r"(?<![A-Za-z0-9_\-])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{30,}", "github-token"),
+    (r"(?<![A-Za-z0-9_\-])github_pat_[A-Za-z0-9_]{40,}", "github-token"),
+    (r"(?<![A-Za-z0-9_\-])glpat-[A-Za-z0-9_\-]{20,}", "gitlab-token"),
+    (r"(?<![A-Za-z0-9_\-])(?:AKIA|ASIA)[0-9A-Z]{16}", "aws-key"),
+    (r"(?<![A-Za-z0-9_\-])xox[abprs]-[A-Za-z0-9\-]{10,}", "slack-token"),
     (r"https://hooks\.slack\.com/services/[A-Za-z0-9/]+", "slack-webhook"),
     (r"https://discord(?:app)?\.com/api/webhooks/[0-9]+/[A-Za-z0-9_\-]+", "discord-webhook"),
-    (r"AIza[0-9A-Za-z_\-]{35}", "google-key"),
-    (r"ya29\.[0-9A-Za-z_\-]{20,}", "google-oauth"),
-    (r"(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,}", "stripe-key"),
-    (r"SG\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}", "sendgrid-key"),
-    (r"npm_[A-Za-z0-9]{36}", "npm-token"),
-    (r"pypi-[A-Za-z0-9_\-]{50,}", "pypi-token"),
-    (r"gsk_[A-Za-z0-9]{40,}", "groq-key"),
+    (r"(?<![A-Za-z0-9_\-])AIza[0-9A-Za-z_\-]{35}", "google-key"),
+    (r"(?<![A-Za-z0-9_\-])ya29\.[0-9A-Za-z_\-]{20,}", "google-oauth"),
+    (r"(?<![A-Za-z0-9_\-])(?:sk|rk)_(?:live|test)_[0-9A-Za-z]{20,}", "stripe-key"),
+    (r"(?<![A-Za-z0-9_\-])SG\.[A-Za-z0-9_\-]{20,}\.[A-Za-z0-9_\-]{20,}", "sendgrid-key"),
+    (r"(?<![A-Za-z0-9_\-])npm_[A-Za-z0-9]{36}", "npm-token"),
+    (r"(?<![A-Za-z0-9_\-])pypi-[A-Za-z0-9_\-]{50,}", "pypi-token"),
+    (r"(?<![A-Za-z0-9_\-])gsk_[A-Za-z0-9]{40,}", "groq-key"),
     (r"[0-9]{8,10}:AA[0-9A-Za-z_\-]{33}", "telegram-token"),
     (r"FlyV1 [A-Za-z0-9_\-+/=,]{20,}", "fly-token"),
     (r"eyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}", "jwt"),
@@ -141,9 +141,31 @@ class Redactor:
         return v
 
 
-def redact_case_dir(case_dir: Path, redactor: Redactor) -> dict:
-    """``{meta, context}`` of a case, redacted."""
+def _is_instructions(rec: dict) -> bool:
+    """The user's CLAUDE.md / AGENTS.md: an ``instructions`` attachment in Claude
+    Code, an injected ``# AGENTS.md`` / ``<user_instructions>`` message in Codex."""
+    if rec.get("type") == "attachment":
+        return (rec.get("attachment") or {}).get("type") == "instructions"
+    payload = rec.get("payload") or {}
+    if rec.get("type") != "response_item" or payload.get("type") != "message":
+        return False
+    text = "".join(
+        b.get("text", "") for b in payload.get("content") or [] if isinstance(b, dict)
+    ).lstrip()
+    return text.startswith(("# AGENTS.md", "<user_instructions>"))
+
+
+def redact_case_dir(case_dir: Path, redactor: Redactor, keep_instructions: bool = False) -> dict:
+    """``{meta, context}`` of a case, redacted. CLAUDE.md contents are dropped
+    unless ``keep_instructions``: they're the user's private configuration."""
     meta = json.loads((case_dir / "case.json").read_text())
-    lines = (case_dir / "context.jsonl").read_text().splitlines()
-    context = [redactor.value(json.loads(line)) for line in lines if line.strip()]
+    context = []
+    for line in (case_dir / "context.jsonl").read_text().splitlines():
+        if not line.strip():
+            continue
+        rec = json.loads(line)
+        if _is_instructions(rec) and not keep_instructions:
+            redactor._hit("instructions-file")
+            continue
+        context.append(redactor.value(rec))
     return {"meta": redactor.value(meta), "context": context}
