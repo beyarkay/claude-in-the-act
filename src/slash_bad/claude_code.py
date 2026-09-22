@@ -35,6 +35,10 @@ DENY_REASON = (
 )
 
 
+def claude_home() -> Path:
+    return Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+
+
 def _content(rec: dict) -> object:
     return (rec.get("message") or {}).get("content")
 
@@ -249,7 +253,7 @@ def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
     workdir = Path(orig_cwd) if orig_cwd and Path(orig_cwd).is_dir() else tmp / "work"
     workdir.mkdir(exist_ok=True)
     workdir = workdir.resolve()
-    proj = Path.home() / ".claude" / "projects" / _slug(str(workdir))
+    proj = claude_home() / "projects" / _slug(str(workdir))
     created_proj = not proj.exists()
     proj.mkdir(parents=True, exist_ok=True)
     sid = str(uuid.uuid4())

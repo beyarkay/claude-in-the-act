@@ -94,7 +94,8 @@ def skill_text(name: str, cli: str) -> str:
 
 
 def skill_dirs() -> list[Path]:
-    dirs = [Path.home() / ".claude" / "skills"]
+    claude = os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
+    dirs = [Path(claude) / "skills"]
     codex_home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
     if codex_home.is_dir():
         dirs.append(codex_home / "skills")

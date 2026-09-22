@@ -87,7 +87,7 @@ _DEFAULT_TASTE = """- praising my ideas ("you're right", "good question", "good 
 def sources() -> list[tuple[str, Path]]:
     home = Path.home()
     out = []
-    projects = home / ".claude" / "projects"
+    projects = claude_code.claude_home() / "projects"
     if projects.is_dir():
         out += [("claude-code", p) for p in projects.rglob("*.jsonl") if "subagents" not in p.parts]
     legacy = home / ".claude" / "claude-in-the-act" / "data"
