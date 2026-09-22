@@ -59,17 +59,14 @@ def strip_sentinel(messages: list[dict]) -> list[dict]:
     k = next((i for i, m in enumerate(messages) if _has_sentinel(m)), None)
     if k is None:
         return messages
-    before, after = list(messages[:k]), list(messages[k + 1 :])
-    if (
-        before
-        and before[-1].get("role") == "assistant"
-        and [t.strip() for t in _texts(before[-1])] == [NO_RESPONSE]
-    ):
-        before.pop()
-    if before and before[-1].get("role") == "user":
-        last = dict(before[-1])
-        content = last.get("content")
-        if isinstance(content, list):
+    out = []
+    # Newer models get mid-conversation role:"system" messages, so the patches
+    # aren't necessarily adjacent to the sentinel; remove them wherever they are.
+    for m in messages[:k] + messages[k + 1 :]:
+        if m.get("role") == "assistant" and [t.strip() for t in _texts(m)] == [NO_RESPONSE]:
+            continue
+        content = m.get("content")
+        if m.get("role") == "user" and isinstance(content, list):
             kept = [
                 b
                 for b in content
@@ -79,12 +76,11 @@ def strip_sentinel(messages: list[dict]) -> list[dict]:
                     and b.get("text", "").strip() == CONTINUE_NUDGE
                 )
             ]
-            if kept:
-                last["content"] = kept
-                before[-1] = last
-            else:
-                before.pop()
-    return before + after
+            if not kept:
+                continue
+            m = {**m, "content": kept}
+        out.append(m)
+    return out
 
 
 def rewrite_body(body: bytes) -> bytes:

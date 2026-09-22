@@ -67,6 +67,33 @@ def summary(rows: list[dict]) -> dict:
     }
 
 
+def groups(rows: list[dict]) -> list[dict]:
+    """Rows pooled by behaviour: mean scores and one outcome per behaviour."""
+    from slash_bad.compare import outcome
+
+    by: dict[str, list[dict]] = {}
+    for r in rows:
+        if r["outcome"] != "error" and r.get("behaviour"):
+            by.setdefault(r["behaviour"], []).append(r)
+    out = []
+    for name, rs in by.items():
+        ref, new = _mean([r["reference"] for r in rs]), _mean([r["new"] for r in rs])
+        ctl = [r["control"] for r in rs if r.get("control") is not None]
+        out.append(
+            {
+                "complaint": name,
+                "n": len(rs),
+                "flagged": _mean([r["flagged"] for r in rs if r.get("flagged") is not None]),
+                "control": _mean(ctl) if len(ctl) == len(rs) else None,
+                "reference": ref,
+                "new": new,
+                "outcome": outcome(ref, new),
+                "cases": [r["case"] for r in rs],
+            }
+        )
+    return out
+
+
 def _ordered(rows: list[dict]) -> list[dict]:
     rank = {"better": 0, "worse": 1, "same": 2, "error": 3}
     return sorted(
@@ -105,6 +132,19 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
         if s["controlMean"] is not None:
             out.append(f"    {(olds[:22] + ' again'):<32} {s['controlMean']:.1f}")
         out.append(f"    {s['newModel'][:32]:<32} {s['newMean']:.1f}")
+    gs = groups(rows)
+    if len(gs) >= 2:
+        n = Counter(g["outcome"] for g in gs)
+        out += [
+            "",
+            f"{c(BOLD)}by behaviour{c(RESET)}: better on {n['better']}, same on {n['same']}, "
+            f"worse on {n['worse']}  {c(DIM)}(old model again → new model){c(RESET)}",
+        ]
+        for g in _ordered(gs):
+            out.append(
+                f"  {c(_color(g['outcome']))}{MARK[g['outcome']]} {fmt(g['reference']):>4} → "
+                f"{fmt(g['new']):<4}{c(RESET)} {g['complaint']} {c(DIM)}({g['n']}){c(RESET)}"
+            )
     out += [
         "",
         f"{c(BOLD)}per case{c(RESET)}  {c(DIM)}flagged · old model again · new model{c(RESET)}",
@@ -157,6 +197,10 @@ def _t(x, y, text, size, fill=FG, weight=400, anchor="start", family=FONT):
 
 def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
     s = summary(rows)
+    gs = groups(rows)
+    use_groups = len(gs) >= 2
+    items = gs if use_groups else rows
+    tally = Counter(i["outcome"] for i in items)
     olds = ", ".join(s["oldModels"][:2]) + (" …" if len(s["oldModels"]) > 2 else "")
     vs = "the old model re-run on the same moments" if s["controlled"] else "the flagged responses"
     parts = [
@@ -176,10 +220,11 @@ def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
     ]
     x = 64
     for key, col in (("better", C_BETTER), ("same", C_SAME), ("worse", C_WORSE)):
-        parts.append(_t(x, 300, s[key], 96, fill=col, weight=800))
+        parts.append(_t(x, 300, tally[key], 96, fill=col, weight=800))
         parts.append(_t(x + 4, 336, key, 24, fill=col, weight=600))
         x += 150
-    parts.append(_t(64, 372, f"vs {vs}", 16, fill=MUTED))
+    unit = f"on {len(gs)} behaviours I care about, " if use_groups else ""
+    parts.append(_t(64, 372, f"{unit}vs {vs}", 16, fill=MUTED))
     if s["newMean"] is not None:
         y = 428
         parts.append(_t(64, y, "average score (10 = complaint gone)", 18, fill=MUTED))
@@ -193,8 +238,8 @@ def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
             parts.append(_t(136, y, label, 20, fill=col))
 
     px, pw, top = 560, 576, 236
-    shown = [r for r in _ordered(rows) if r["outcome"] != "error"][:7]
-    ax0, ax1 = px + (280 if show_complaints else 40), px + pw - 16
+    shown = [r for r in _ordered(items) if r["outcome"] != "error"][:7]
+    ax0, ax1 = px + (280 if show_complaints or use_groups else 40), px + pw - 16
     parts.append(_t(ax0, top - 40, "0", 14, fill=MUTED, anchor="middle"))
     parts.append(_t(ax1, top - 40, "10", 14, fill=MUTED, anchor="middle"))
     parts.append(
@@ -207,8 +252,9 @@ def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
     for i, r in enumerate(shown):
         y = top + i * 46
         col = {"better": C_BETTER, "worse": C_WORSE}.get(r["outcome"], C_SAME)
-        if show_complaints:
-            parts.append(_t(px, y + 6, _one_line(r["complaint"], 28), 16, fill=FG))
+        if show_complaints or use_groups:
+            label = f"{r['complaint']} ({r['n']})" if use_groups else r["complaint"]
+            parts.append(_t(px, y + 6, _one_line(label, 30), 16, fill=FG))
         parts.append(
             f'<line x1="{ax0}" y1="{y}" x2="{ax1}" y2="{y}" stroke="{LINE}" stroke-width="2"/>'
         )
@@ -229,13 +275,13 @@ def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
                 f'transform="rotate(45 {cx:.1f} {y})"/>'
             )
         parts.append(f'<circle cx="{at(r["new"]):.1f}" cy="{y}" r="8" fill="{col}"/>')
-    more = len([r for r in rows if r["outcome"] != "error"]) - len(shown)
+    more = len([r for r in items if r["outcome"] != "error"]) - len(shown)
     legend_y = top + len(shown) * 46 + 8
     if more > 0:
         parts.append(_t(px, legend_y, f"+ {more} more", 16, fill=MUTED))
         legend_y += 28
     legend = "○ flagged   ◆ old model again   ● new model"
-    parts.append(_t(ax0 if show_complaints else px, legend_y, legend, 15, fill=MUTED))
+    parts.append(_t(ax0 if show_complaints or use_groups else px, legend_y, legend, 15, fill=MUTED))
     parts.append(f'<line x1="64" y1="{H - 64}" x2="{W - 64}" y2="{H - 64}" stroke="{LINE}"/>')
     parts.append(
         _t(

@@ -25,6 +25,9 @@ from slash_bad.store import Case, read_jsonl
 from slash_bad.view import as_text, tool_call_text
 
 HARNESS = "claude-code"
+# Bump when a replay would come out differently for the same model, so stale
+# replays are never reused. v2: resume patches stripped around system messages.
+REPLAY_VERSION = 2
 SYNTHETIC_MODEL = "<synthetic>"
 CLAUDE_TIMEOUT = 900
 DENY_REASON = (
@@ -302,6 +305,7 @@ def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
         {
             "kind": "replay",
             "harness": HARNESS,
+            "replayVersion": REPLAY_VERSION,
             "requestedModel": model,
             "costUsd": meta.get("total_cost_usd"),
             "returncode": rc,

@@ -21,6 +21,7 @@ def fakes(monkeypatch):
         text = "It's down: the curl failed." if model == "new-model" else "It's probably fine."
         return {
             "kind": "replay",
+            "replayVersion": claude_code.REPLAY_VERSION,
             "model": model,
             "requestedModel": model,
             "first": text,

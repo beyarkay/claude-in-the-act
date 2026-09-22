@@ -95,7 +95,10 @@ def replays(case: Case, model: str, n: int, proxy_url: str | None, fresh: bool) 
         else [
             r
             for r in case.results()
-            if r.get("kind") == "replay" and r.get("requestedModel") == model and not r.get("error")
+            if r.get("kind") == "replay"
+            and r.get("requestedModel") == model
+            and not r.get("error")
+            and r.get("replayVersion") == HARNESSES[case.harness].REPLAY_VERSION
         ]
     )
     out = have[:n]
@@ -188,6 +191,7 @@ def compare_case(
         "oldModel": old_model,
         "requestedModel": model,
         "oldResponse": case.meta.get("flagged", ""),
+        "behaviour": case.meta.get("behaviour", ""),
     }
     try:
         base = baseline(case, judge_model)

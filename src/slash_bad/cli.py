@@ -90,6 +90,15 @@ def cmd_compare(args) -> int:
             f"no cases in {CASES_DIR} yet — flag one with /bad <what went wrong>", file=sys.stderr
         )
         return 1
+    if not args.no_group:
+        from slash_bad import behaviours
+
+        try:
+            behaviours.assign(cases)
+        except RuntimeError as e:
+            print(
+                f"slash-bad: couldn't group cases by behaviour ({e}); continuing", file=sys.stderr
+            )
     rows = compare.run(
         cases,
         args.model,
@@ -121,6 +130,21 @@ def cmd_baseline(args) -> int:
     for case in cases:
         v = compare.baseline(case, judge_model)
         print(f"{v.get('score')!s:>4}/10  {case.id}  {' '.join(case.complaint.split())[:70]}")
+    return 0
+
+
+def cmd_behaviours(args) -> int:
+    from slash_bad import behaviours
+
+    cases = all_cases()
+    labels = behaviours.assign(cases, regroup=args.regroup)
+    for b in behaviours.load():
+        members = [c for c in cases if labels.get(c.id) == b["name"]]
+        if not members:
+            continue
+        print(f"{b['name']} ({len(members)}): {b.get('description', '')}")
+        for c in members:
+            print(f"    {c.id}  {' '.join(c.complaint.split())[:90]}")
     return 0
 
 
@@ -211,6 +235,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="skip re-running the old model; compare with the flagged response instead (cheaper, flatters the new model)",
     )
+    p.add_argument("--no-group", action="store_true", help="don't group cases by behaviour")
     p.add_argument("--workers", type=int, default=8)
     p.add_argument(
         "--fresh", action="store_true", help="re-run replays instead of reusing cached ones"
@@ -225,6 +250,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("cases", nargs="*")
     p.add_argument("--judge")
     p.set_defaults(fn=cmd_baseline)
+
+    p = sub.add_parser("behaviours", help="group your cases by the behaviour they complain about")
+    p.add_argument("--regroup", action="store_true", help="start the grouping over")
+    p.set_defaults(fn=cmd_behaviours)
 
     p = sub.add_parser("config", help="show or set a config value, e.g. `config judge sonnet`")
     p.add_argument("key", nargs="?")

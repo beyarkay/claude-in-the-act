@@ -86,3 +86,27 @@ def test_proxy_rewrites_and_forwards_streaming_body():
     assert seen["auth"] == "Bearer abc"
     assert len(seen["body"]["messages"]) == 3
     assert SENTINEL not in json.dumps(seen["body"])
+
+
+def test_strip_handles_system_messages_between_the_patches():
+    msgs = [
+        {"role": "user", "content": [{"type": "text", "text": "run it"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "tool_use", "id": "t", "name": "Bash", "input": {}}],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "t", "content": "ok"},
+                {"type": "text", "text": CONTINUE_NUDGE},
+            ],
+        },
+        {"role": "system", "content": "hook context"},
+        {"role": "assistant", "content": [{"type": "text", "text": NO_RESPONSE}]},
+        {"role": "system", "content": "You are powered by ..."},
+        {"role": "user", "content": [{"type": "text", "text": SENTINEL}]},
+    ]
+    out = strip_sentinel(msgs)
+    assert [m["role"] for m in out] == ["user", "assistant", "user", "system", "system"]
+    assert out[2]["content"] == [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]

@@ -29,6 +29,7 @@ from slash_bad.store import Case, read_jsonl
 from slash_bad.view import as_text, tool_call_text
 
 HARNESS = "codex"
+REPLAY_VERSION = 1
 CODEX_TIMEOUT = 900
 DENY_REASON = (
     "Permission denied: the user has turned off tool use for this reply. Continue without tools."
@@ -310,6 +311,7 @@ def replay(case: Case, model: str, max_seconds: int = CODEX_TIMEOUT) -> dict:
         {
             "kind": "replay",
             "harness": HARNESS,
+            "replayVersion": REPLAY_VERSION,
             "requestedModel": model,
             "model": result.get("model") or model,
             "costUsd": None,
