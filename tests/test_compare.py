@@ -147,3 +147,9 @@ def test_complaint_found_nowhere_is_unmatched(case, monkeypatch, fakes):
     row = compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
     assert row["outcome"] == "unmatched"
     assert fakes["replay"] == []
+
+
+def test_a_case_from_the_model_under_test_is_skipped(case, fakes):
+    row = compare.compare_case(case, "claude-opus-5", "opus", "deny", "http://proxy", fresh=False)
+    assert row["outcome"] == "same-model"
+    assert fakes["replay"] == []

@@ -23,8 +23,8 @@ GREEN, RED, GREY, BOLD, DIM, RESET = (
     "\x1b[2m",
     "\x1b[0m",
 )
-MARK = {"better": "▲", "worse": "▼", "same": "●", "error": "✗", "unmatched": "?"}
-SKIPPED = ("error", "unmatched")
+MARK = {"better": "▲", "worse": "▼", "same": "●", "error": "✗", "unmatched": "?", "same-model": "="}
+SKIPPED = ("error", "unmatched", "same-model")
 
 
 def _color(outcome: str) -> str:
@@ -54,6 +54,7 @@ def summary(rows: list[dict]) -> dict:
         "worse": counts["worse"],
         "errors": counts["error"],
         "unmatched": counts["unmatched"],
+        "sameModel": counts["same-model"],
         "scored": len(scored),
         "flaggedMean": _mean([r["flagged"] for r in scored if r.get("flagged") is not None]),
         "controlMean": _mean([r["control"] for r in with_control]),
@@ -97,7 +98,7 @@ def groups(rows: list[dict]) -> list[dict]:
 
 
 def _ordered(rows: list[dict]) -> list[dict]:
-    rank = {"better": 0, "worse": 1, "same": 2, "unmatched": 3, "error": 4}
+    rank = {"better": 0, "worse": 1, "same": 2, "unmatched": 3, "same-model": 4, "error": 5}
     return sorted(
         rows,
         key=lambda r: (rank[r["outcome"]], -abs((r.get("new") or 0) - (r.get("reference") or 0))),
@@ -157,8 +158,7 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
             out.append(f"  {mark} error{c(RESET)}  {_one_line(r['complaint'], 70)}")
             out.append(f"      {c(DIM)}{_one_line(r.get('error', ''), 100)}{c(RESET)}")
             continue
-        if r["outcome"] == "unmatched":
-            out.append(f"  {c(DIM)}? skipped   {_one_line(r['complaint'], 76)}{c(RESET)}")
+        if r["outcome"] in ("unmatched", "same-model"):
             continue
         scores = f"{fmt(r['flagged']):>3} · {fmt(r['control']):>3} · {fmt(r['new']):<3}"
         out.append(f"  {mark} {scores}{c(RESET)} {_one_line(r['complaint'], 76)}")
@@ -168,6 +168,10 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
         notes.append(
             f"{s['unmatched']} case(s) skipped: the judge couldn't find the complaint in the flagged "
             "message or the ones just before it, so a replay wouldn't measure it."
+        )
+    if s["sameModel"]:
+        notes.append(
+            f"{s['sameModel']} case(s) skipped: the flagged response came from {s['newModel'] or 'the model being tested'} itself."
         )
     if s["selfJudged"]:
         notes.append(

@@ -194,6 +194,8 @@ def compare_case(
         "oldResponse": case.meta.get("flagged", ""),
         "behaviour": case.meta.get("behaviour", ""),
     }
+    if old_model and old_model == model:
+        return {**row, "outcome": "same-model"}
     try:
         base = baseline(case, judge_model)
         if locate_:
@@ -207,6 +209,8 @@ def compare_case(
         new = scored_replays(case, model, samples, judge_model, variant, proxy_url, fresh)
         if new.get("error"):
             return {**row, "outcome": "error", "error": new["error"], "flagged": base.get("score")}
+        if old_model and new.get("model") == old_model:
+            return {**row, "outcome": "same-model"}
         ctl = (
             scored_replays(case, old_model, samples, judge_model, variant, proxy_url, fresh)
             if control and old_model
