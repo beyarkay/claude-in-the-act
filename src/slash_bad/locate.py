@@ -54,7 +54,7 @@ def relocate(case: Case, judge_model: str, flagged_score: int | None) -> dict:
     Returns ``{"status": "kept" | "moved" | "unmatched", ...}``."""
     if flagged_score is None or flagged_score < UNMATCHED_AT:
         return {"status": "kept"}
-    if case.meta.get("unmatched"):
+    if (case.meta.get("unmatched") or {}).get("judge") == judge_model:
         return {"status": "unmatched"}
     mod = _MODS[case.harness]
     best = None
