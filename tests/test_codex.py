@@ -81,3 +81,28 @@ def test_parse_replay_first_message_stops_at_tool_output():
     assert out["first"] == "Let me look."
     assert out["firstToolCalls"] == ["exec_command: ps"]
     assert out["text"] == "Let me look.\n\nIt's down."
+
+
+def test_split_prefers_the_final_answer_over_later_commentary():
+    recs = ROLLOUT[:-1] + [
+        {"type": "turn_context", "payload": {"model": "gpt-5.5"}},
+        msg("user", "now fix it"),
+        ri(
+            {
+                "type": "message",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "Looking at the layout."}],
+            }
+        ),
+    ]
+    recs[9]["payload"]["phase"] = "final_answer"
+    assert codex.split(recs)["flagged"] == "Yes, it's up."
+
+
+def test_mid_turn():
+    started = {"type": "event_msg", "payload": {"type": "task_started"}}
+    done = {"type": "event_msg", "payload": {"type": "task_complete"}}
+    assert codex.mid_turn([started])
+    assert not codex.mid_turn([started, done])
+    assert codex.mid_turn([started, done, started])

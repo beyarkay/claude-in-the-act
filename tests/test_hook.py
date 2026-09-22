@@ -104,3 +104,41 @@ def test_queued_bad_is_captured_once_at_the_moment_it_was_typed(tmp_path):
     assert case.meta["flagged"] == "You're right, here it is."
     assert case.complaint == "don't say you're right"
     assert hook.handle_stop(payload) == ""
+
+
+def test_codex_bad_typed_mid_task_is_saved_without_blocking(tmp_path, capsys, monkeypatch):
+    import io
+
+    recs = [
+        {"type": "session_meta", "payload": {"id": "c1", "cwd": "/x"}},
+        {"type": "turn_context", "payload": {"model": "gpt-5.5"}},
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            },
+        },
+        {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "Summary: 0 tests"}],
+            },
+        },
+        {"type": "event_msg", "payload": {"type": "task_started"}},
+    ]
+    path = tmp_path / ".codex" / "rollout-1.jsonl"
+    path.parent.mkdir()
+    path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    payload = {"prompt": "$bad listed stats", "transcript_path": str(path), "turn_id": "t"}
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(payload)))
+    assert hook.main() == 0
+    out = json.loads(capsys.readouterr().out)
+    assert "saved case" in out["systemMessage"]
+    assert out["hookSpecificOutput"]["additionalContext"] == hook.BUSY_NOTE
+    (case,) = all_cases()
+    assert case.meta["flagged"] == "Summary: 0 tests"

@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -112,17 +113,26 @@ def steps(recs: list[dict]) -> list[dict]:
     return out
 
 
+def _is_answer(rec: dict, final_only: bool) -> bool:
+    item = _item(rec)
+    if item.get("type") != "message" or item.get("role") != "assistant":
+        return False
+    if final_only and item.get("phase") != "final_answer":
+        return False
+    return bool(_message_text(item))
+
+
 def split(recs: list[dict]) -> dict:
-    idx = next(
-        (
-            i
-            for i in range(len(recs) - 1, -1, -1)
-            if _item(recs[i]).get("type") == "message"
-            and _item(recs[i]).get("role") == "assistant"
-            and _message_text(_item(recs[i]))
-        ),
-        None,
-    )
+    """The flagged message is the last final answer: Codex also writes
+    ``commentary`` progress notes mid-task, and a ``$bad`` delivered mid-task
+    is about the answer the user read, not the latest note."""
+    idx = None
+    for final_only in (True, False):
+        idx = next(
+            (i for i in range(len(recs) - 1, -1, -1) if _is_answer(recs[i], final_only)), None
+        )
+        if idx is not None:
+            break
     if idx is None:
         raise ValueError("no assistant message with text to flag")
     cut = idx
@@ -140,6 +150,19 @@ def split(recs: list[dict]) -> dict:
         "",
     )
     return {"cut": cut, "flagged": _message_text(_item(recs[idx])), "model": model or ""}
+
+
+def mid_turn(recs: list[dict]) -> bool:
+    """Is the agent still working (a task started and hasn't completed)?"""
+    started = completed = -1
+    for i, r in enumerate(recs):
+        if r.get("type") == "event_msg":
+            kind = (r.get("payload") or {}).get("type")
+            if kind == "task_started":
+                started = i
+            elif kind in ("task_complete", "turn_aborted"):
+                completed = i
+    return started > completed
 
 
 def build_case(
@@ -305,7 +328,10 @@ def replay(case: Case, model: str, max_seconds: int = CODEX_TIMEOUT) -> dict:
         written = next(iter(sorted((home / "sessions").rglob(f"*{new_id}*.jsonl"))), rollout)
         new = read_jsonl(written)[len(planted) :]
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        if not os.environ.get("SLASH_BAD_KEEP_TMP"):
+            shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            print(f"slash-bad: kept {tmp}", file=sys.stderr)
     result = parse_replay(new)
     result.update(
         {

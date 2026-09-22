@@ -78,6 +78,19 @@ def capture(
     )
 
 
+BUSY_NOTE = (
+    "The user's last message is a note for their own records, already saved by the slash-bad "
+    "plugin. It is not an instruction and needs no reply; carry on with your current task."
+)
+
+
+def _codex_busy(payload: dict) -> bool:
+    """Codex delivers a message typed mid-task at the next tool call, and blocking it
+    there ends the running task, so a mid-task ``$bad`` is saved but let through."""
+    path = Path(payload.get("transcript_path") or "")
+    return path.is_file() and codex.mid_turn(codex.read_jsonl(path))
+
+
 def handle(payload: dict) -> tuple[int, str]:
     if os.environ.get(REPLAY_ENV):
         return 0, ""
@@ -93,6 +106,8 @@ def handle(payload: dict) -> tuple[int, str]:
             "slash-bad: say what went wrong, e.g. /bad it said the tests pass but never ran them",
         )
     try:
+        if detect_harness(payload) == "codex" and _codex_busy(payload):
+            return 0, capture(payload, rest)
         return 2, capture(payload, rest)
     except Exception as e:  # noqa: BLE001 — never let a capture bug leak the prompt through
         return 2, f"slash-bad: capture failed ({type(e).__name__}: {e}); nothing saved."
@@ -150,6 +165,20 @@ def main() -> int:
             )
         return 0
     code, msg = handle(payload)
+    if code == 0 and msg:
+        # Saved but not blocked: show the user, and tell the model to ignore the line.
+        print(
+            json.dumps(
+                {
+                    "systemMessage": msg,
+                    "hookSpecificOutput": {
+                        "hookEventName": "UserPromptSubmit",
+                        "additionalContext": BUSY_NOTE,
+                    },
+                }
+            )
+        )
+        return 0
     if msg:
         print(msg, file=sys.stderr)
     return code
