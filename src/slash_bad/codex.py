@@ -25,12 +25,12 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from slash_bad import REPLAY_ENV
+from slash_bad import HOME, REPLAY_ENV
 from slash_bad.store import Case, read_jsonl
 from slash_bad.view import as_text, tool_call_text
 
 HARNESS = "codex"
-REPLAY_VERSION = 1
+REPLAY_VERSION = 2
 CODEX_TIMEOUT = 900
 DENY_REASON = (
     "Permission denied: the user has turned off tool use for this reply. Continue without tools."
@@ -216,14 +216,61 @@ def default_model() -> str:
     return _user_config().get("model", "")
 
 
+def _probe_comp_hash(model: str) -> str | None:
+    """Ask Codex itself: one tiny ``codex exec`` on ``model`` in a throwaway home,
+    then read the compaction hash it recorded for that model."""
+    with tempfile.TemporaryDirectory(prefix="slash-bad-probe-") as tmp:
+        home = Path(tmp) / "home"
+        home.mkdir()
+        for name in ("auth.json", "models_cache.json"):
+            if (codex_home() / name).exists():
+                shutil.copy(codex_home() / name, home / name)
+        (home / "config.toml").write_text(f'model = "{model}"\nmodel_reasoning_effort = "low"\n')
+        try:
+            subprocess.run(
+                ["codex", "exec", "--skip-git-repo-check", "-m", model, "Reply with the word ok."],
+                cwd=tmp,
+                env={**os.environ, "CODEX_HOME": str(home), REPLAY_ENV: "1"},
+                capture_output=True,
+                timeout=300,
+                stdin=subprocess.DEVNULL,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        for rollout in (home / "sessions").rglob("*.jsonl"):
+            for r in read_jsonl(rollout):
+                if r.get("type") == "turn_context" and (r.get("payload") or {}).get("comp_hash"):
+                    return r["payload"]["comp_hash"]
+    return None
+
+
 def _comp_hash(model: str) -> str | None:
+    """The compaction hash Codex expects for ``model``. A mismatch with the one
+    in the rollout makes Codex compact the whole history before replying, so the
+    new model would never see the real conversation."""
     try:
         cache = json.loads((codex_home() / "models_cache.json").read_text())
+        found = next(
+            (m.get("comp_hash") for m in cache.get("models", []) if m.get("slug") == model), None
+        )
+        if found:
+            return found
     except (OSError, json.JSONDecodeError):
-        return None
-    return next(
-        (m.get("comp_hash") for m in cache.get("models", []) if m.get("slug") == model), None
-    )
+        pass
+    known_path = HOME / "codex-comp-hash.json"
+    try:
+        known = json.loads(known_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        known = {}
+    if model not in known:
+        probed = _probe_comp_hash(model)
+        if probed is None:
+            return None
+        known[model] = probed
+        known_path.parent.mkdir(parents=True, exist_ok=True)
+        known_path.write_text(json.dumps(known, indent=2))
+    return known[model]
 
 
 def prepare_rollout(context: list[dict], old_id: str, new_id: str, model: str) -> list[dict]:
@@ -261,6 +308,9 @@ def replay(case: Case, model: str, max_seconds: int = CODEX_TIMEOUT) -> dict:
         src = codex_home() / name
         if src.exists():
             shutil.copy(src, home / name)
+    # Same skills as the original session, or Codex re-sends a different skills list.
+    if (codex_home() / "skills").is_dir():
+        (home / "skills").symlink_to(codex_home() / "skills")
     effort = _user_config().get("model_reasoning_effort")
     (home / "config.toml").write_text(
         f'model = "{model}"\n' + (f'model_reasoning_effort = "{effort}"\n' if effort else "")
@@ -347,7 +397,20 @@ def replay(case: Case, model: str, max_seconds: int = CODEX_TIMEOUT) -> dict:
     )
     if rc != 0 or not (result["text"] or result["toolAttempts"]):
         result["error"] = (err or "no output")[-600:]
+    elif problem := unfaithful(new):
+        result["error"] = f"replay not faithful: {problem}"
     return result
+
+
+def unfaithful(new: list[dict]) -> str | None:
+    """Why the new model didn't see the stored conversation as it was, if it didn't."""
+    for r in new:
+        if r.get("type") == "compacted":
+            return "Codex compacted the history before the new model replied"
+        item = _item(r)
+        if item.get("type") == "message" and "<model_switch>" in _message_text(item):
+            return "Codex told the model it had been switched"
+    return None
 
 
 def parse_replay(new: list[dict]) -> dict:
