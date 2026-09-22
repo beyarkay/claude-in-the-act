@@ -108,3 +108,42 @@ def test_judge_parse():
     assert judge.parse_verdict('```json\n{"rationale": "x", "score": 7}\n```') == (7, "x")
     assert judge.parse_verdict('{"score": 11}')[0] is None
     assert judge.parse_verdict("no json here")[0] is None
+
+
+def test_unmatched_complaint_moves_to_the_earlier_message(tmp_path, monkeypatch, fakes):
+    import json
+
+    from conftest import cc_assistant, cc_user
+
+    from slash_bad import judge as judge_mod
+
+    recs = [
+        cc_user("how did the run go?"),
+        cc_assistant([{"type": "text", "text": "Great question! It went well."}], "a1"),
+        cc_assistant([{"type": "text", "text": "Anything else?"}], "a2"),
+    ]
+    path = tmp_path / "t.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in recs))
+    meta, context = claude_code.build_case(path, "don't open with great question")
+    case = Case.create(meta, context)
+
+    def score(complaint, earlier, turn, response, judge_model="opus"):
+        s = 0 if "Great question" in response else 9
+        return {"score": s, "rationale": "r", "judgeModel": "j", "costUsd": 0}
+
+    monkeypatch.setattr(judge_mod, "score", score)
+    row = compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
+    assert row.get("relocated") and row["flagged"] == 0
+    assert case.meta["flagged"] == "Great question! It went well."
+    assert (case.path / "context.before-relocate.jsonl").exists()
+
+
+def test_complaint_found_nowhere_is_unmatched(case, monkeypatch, fakes):
+    from slash_bad import judge as judge_mod
+
+    monkeypatch.setattr(
+        judge_mod, "score", lambda *a, **k: {"score": 10, "rationale": "absent", "judgeModel": "j"}
+    )
+    row = compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
+    assert row["outcome"] == "unmatched"
+    assert fakes["replay"] == []

@@ -108,6 +108,7 @@ def cmd_compare(args) -> int:
         fresh=args.fresh,
         samples=args.samples,
         control=not args.no_control,
+        locate_=not args.no_locate,
     )
     if not rows:
         print(f"no cases can run on {args.model} (wrong harness?)", file=sys.stderr)
@@ -234,6 +235,11 @@ def main(argv: list[str] | None = None) -> int:
         "--no-control",
         action="store_true",
         help="skip re-running the old model; compare with the flagged response instead (cheaper, flatters the new model)",
+    )
+    p.add_argument(
+        "--no-locate",
+        action="store_true",
+        help="don't look for the right message when the flagged one doesn't match the complaint",
     )
     p.add_argument("--no-group", action="store_true", help="don't group cases by behaviour")
     p.add_argument("--workers", type=int, default=8)

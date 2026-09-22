@@ -27,7 +27,7 @@ import time
 import uuid
 from contextlib import ExitStack
 
-from slash_bad import claude_code, codex, judge
+from slash_bad import claude_code, codex, judge, locate
 from slash_bad.proxy import SentinelProxy
 from slash_bad.store import Case
 from slash_bad.view import judge_context
@@ -182,6 +182,7 @@ def compare_case(
     fresh: bool,
     samples: int = 1,
     control: bool = True,
+    locate_: bool = True,
 ) -> dict:
     old_model = case.meta.get("model", "")
     row = {
@@ -195,6 +196,14 @@ def compare_case(
     }
     try:
         base = baseline(case, judge_model)
+        if locate_:
+            loc = locate.relocate(case, judge_model, base.get("score"))
+            if loc["status"] == "unmatched":
+                return {**row, "outcome": "unmatched", "flagged": base.get("score")}
+            if loc["status"] == "moved":
+                base = baseline(case, judge_model)
+                row["oldResponse"] = case.meta.get("flagged", "")
+                row["relocated"] = True
         new = scored_replays(case, model, samples, judge_model, variant, proxy_url, fresh)
         if new.get("error"):
             return {**row, "outcome": "error", "error": new["error"], "flagged": base.get("score")}
@@ -275,6 +284,7 @@ def run(
     fresh: bool = False,
     samples: int = 1,
     control: bool = True,
+    locate_: bool = True,
 ) -> list[dict]:
     target = harness_for_model(model)
     eligible = [c for c in cases if target is None or c.harness == target]
@@ -287,7 +297,16 @@ def run(
         with cf.ThreadPoolExecutor(max_workers=workers) as ex:
             futs = {
                 ex.submit(
-                    compare_case, c, model, judge_model, variant, proxy_url, fresh, samples, control
+                    compare_case,
+                    c,
+                    model,
+                    judge_model,
+                    variant,
+                    proxy_url,
+                    fresh,
+                    samples,
+                    control,
+                    locate_,
                 ): i
                 for i, c in enumerate(eligible)
             }

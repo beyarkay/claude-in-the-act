@@ -23,7 +23,8 @@ GREEN, RED, GREY, BOLD, DIM, RESET = (
     "\x1b[2m",
     "\x1b[0m",
 )
-MARK = {"better": "▲", "worse": "▼", "same": "●", "error": "✗"}
+MARK = {"better": "▲", "worse": "▼", "same": "●", "error": "✗", "unmatched": "?"}
+SKIPPED = ("error", "unmatched")
 
 
 def _color(outcome: str) -> str:
@@ -41,7 +42,7 @@ def _mean(xs: list[float]) -> float | None:
 
 
 def summary(rows: list[dict]) -> dict:
-    scored = [r for r in rows if r["outcome"] != "error"]
+    scored = [r for r in rows if r["outcome"] not in SKIPPED]
     counts = Counter(r["outcome"] for r in rows)
     models = Counter(r.get("newModel") or r["requestedModel"] for r in scored or rows)
     old_models = Counter(r["oldModel"] for r in scored or rows)
@@ -52,6 +53,7 @@ def summary(rows: list[dict]) -> dict:
         "same": counts["same"],
         "worse": counts["worse"],
         "errors": counts["error"],
+        "unmatched": counts["unmatched"],
         "scored": len(scored),
         "flaggedMean": _mean([r["flagged"] for r in scored if r.get("flagged") is not None]),
         "controlMean": _mean([r["control"] for r in with_control]),
@@ -73,7 +75,7 @@ def groups(rows: list[dict]) -> list[dict]:
 
     by: dict[str, list[dict]] = {}
     for r in rows:
-        if r["outcome"] != "error" and r.get("behaviour"):
+        if r["outcome"] not in SKIPPED and r.get("behaviour"):
             by.setdefault(r["behaviour"], []).append(r)
     out = []
     for name, rs in by.items():
@@ -95,7 +97,7 @@ def groups(rows: list[dict]) -> list[dict]:
 
 
 def _ordered(rows: list[dict]) -> list[dict]:
-    rank = {"better": 0, "worse": 1, "same": 2, "error": 3}
+    rank = {"better": 0, "worse": 1, "same": 2, "unmatched": 3, "error": 4}
     return sorted(
         rows,
         key=lambda r: (rank[r["outcome"]], -abs((r.get("new") or 0) - (r.get("reference") or 0))),
@@ -155,10 +157,18 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
             out.append(f"  {mark} error{c(RESET)}  {_one_line(r['complaint'], 70)}")
             out.append(f"      {c(DIM)}{_one_line(r.get('error', ''), 100)}{c(RESET)}")
             continue
+        if r["outcome"] == "unmatched":
+            out.append(f"  {c(DIM)}? skipped   {_one_line(r['complaint'], 76)}{c(RESET)}")
+            continue
         scores = f"{fmt(r['flagged']):>3} · {fmt(r['control']):>3} · {fmt(r['new']):<3}"
         out.append(f"  {mark} {scores}{c(RESET)} {_one_line(r['complaint'], 76)}")
         out.append(f"      {c(DIM)}now: {_one_line(r.get('newResponse', ''), 96)}{c(RESET)}")
     notes = []
+    if s["unmatched"]:
+        notes.append(
+            f"{s['unmatched']} case(s) skipped: the judge couldn't find the complaint in the flagged "
+            "message or the ones just before it, so a replay wouldn't measure it."
+        )
     if s["selfJudged"]:
         notes.append(
             f"The judge ({s['judge']}) is the model being tested, and models tend to rate their own "
@@ -238,7 +248,7 @@ def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
             parts.append(_t(136, y, label, 20, fill=col))
 
     px, pw, top = 560, 576, 236
-    shown = [r for r in _ordered(items) if r["outcome"] != "error"][:7]
+    shown = [r for r in _ordered(items) if r["outcome"] not in SKIPPED][:7]
     ax0, ax1 = px + (280 if show_complaints or use_groups else 40), px + pw - 16
     parts.append(_t(ax0, top - 40, "0", 14, fill=MUTED, anchor="middle"))
     parts.append(_t(ax1, top - 40, "10", 14, fill=MUTED, anchor="middle"))
@@ -275,7 +285,7 @@ def card_svg(rows: list[dict], judge: str, show_complaints: bool = True) -> str:
                 f'transform="rotate(45 {cx:.1f} {y})"/>'
             )
         parts.append(f'<circle cx="{at(r["new"]):.1f}" cy="{y}" r="8" fill="{col}"/>')
-    more = len([r for r in items if r["outcome"] != "error"]) - len(shown)
+    more = len([r for r in items if r["outcome"] not in SKIPPED]) - len(shown)
     legend_y = top + len(shown) * 46 + 8
     if more > 0:
         parts.append(_t(px, legend_y, f"+ {more} more", 16, fill=MUTED))
@@ -388,11 +398,12 @@ def html_report(rows: list[dict], judge: str, card_name: str | None) -> str:
         parts.append(f"<img class='card-img' src='{esc(card_name)}' alt='scorecard'>")
     for r in _ordered(rows):
         o = r["outcome"]
-        score = f"{fmt(r.get('reference'))} → {fmt(r.get('new'))}" if o != "error" else "error"
+        score = f"{fmt(r.get('reference'))} → {fmt(r.get('new'))}" if o not in SKIPPED else o
         parts.append(f"<section class='case'><h2><span class='pill {o}'>{MARK[o]} {score}</span>")
         parts.append(f"<span>{esc(r['complaint'])}</span></h2>")
-        if o == "error":
-            parts.append(f"<div class='why'>{esc(r.get('error', ''))}</div></section>")
+        if o in SKIPPED:
+            why = r.get("error") or "the judge couldn't find this complaint in the flagged message"
+            parts.append(f"<div class='why'>{esc(why)}</div></section>")
             continue
         parts.append("<div class='cols'>")
         for label, model, val, resp, why in (
