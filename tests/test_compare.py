@@ -33,7 +33,7 @@ def fakes(monkeypatch):
 
     def fake_score(complaint, earlier, turn, response, judge_model="opus"):
         calls["judge"].append(response)
-        score = 9 if "down" in response else (3 if "probably" in response else 0)
+        score = 9 if "down" in response else (1 if "probably" in response else 0)
         return {"score": score, "rationale": "r", "judgeModel": "judge-x", "costUsd": 0.01}
 
     monkeypatch.setattr(claude_code, "replay", fake_replay)
@@ -43,7 +43,7 @@ def fakes(monkeypatch):
 
 def test_new_model_is_compared_with_the_old_model_rerun(case, fakes):
     row = compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
-    assert (row["flagged"], row["control"], row["new"]) == (0, 3, 9)
+    assert (row["flagged"], row["control"], row["new"]) == (0, 1, 9)
     assert row["vs"] == "control" and row["outcome"] == "better"
     assert sorted(fakes["replay"]) == ["claude-opus-5", "new-model"]
 
@@ -211,7 +211,9 @@ def test_headline_reads_as_a_sentence(case, fakes):
     )
 
 
-@pytest.mark.parametrize("flagged,control,want", [(1, 4, "better"), (1, 5, "not-reproduced")])
+@pytest.mark.parametrize(
+    "flagged,control,want", [(0, 5, "better"), (1, 6, "not-reproduced"), (6, 9, "not-reproduced")]
+)
 def test_reproduced_means_the_old_model_asked_again_is_close_to_the_original(
     flagged, control, want
 ):

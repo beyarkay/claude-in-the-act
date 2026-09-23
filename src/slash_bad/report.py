@@ -36,7 +36,7 @@ COUNT_ORDER = ("better", "worse", "same", "not-reproduced", "rejected")
 WHY_SKIPPED = {
     "unmatched": "the judge couldn't find the complaint in the flagged reply",
     "same-model": "the flagged reply came from the model being tested",
-    "not-reproduced": "couldn't reproduce: the old model, asked again, scored well above the original",
+    "not-reproduced": "couldn't reproduce: the old model, asked again, no longer showed the behaviour (scored 6+)",
 }
 
 
@@ -274,7 +274,8 @@ def _score(v: float | None, big: bool = False) -> str:
     if v is None:
         return "<span class='score none'>–</span>"
     cls = "score big" if big else "score"
-    return f"<span class='{cls}' style='--h:{_score_hue(v)}'>{fmt(v)}<small>/10</small></span>"
+    text = ("0" if round(v, 1) == 0 else f"{v:.1f}") if big else fmt(v)
+    return f"<span class='{cls}' style='--h:{_score_hue(v)}'>{text}<small>/10</small></span>"
 
 
 def _pretty_date(when: datetime) -> str:
@@ -283,13 +284,13 @@ def _pretty_date(when: datetime) -> str:
 
 _CSS = """
 :root { --bg:#f6f4f0; --fg:#1d1f23; --muted:#6b7079; --line:#e3dfd8; --card:#fff;
-        --better:#15803d; --worse:#b91c1c; --same:#6b7079; --claude:#d97757; --accent:#0f766e;
-        --quote:#f1eee8; --l:38%; --tick:#1d1f23; --same-bar:#c4c7cc; }
+        --better:#15803d; --worse:#b91c1c; --same:#a25555; --warn:#b45309; --claude:#d97757; --accent:#0f766e;
+        --quote:#f1eee8; --l:38%; --tick:#1d1f23; --same-bar:#e2bcbc; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --bg:#0e1116; --fg:#eceae6; --muted:#8d93a0; --line:#262b34;
-        --card:#151922; --better:#4ade80; --worse:#f87171; --same:#a1a6b0; --claude:#d97757;
+        --card:#151922; --better:#4ade80; --worse:#f87171; --same:#d9a3a3; --warn:#fbbf24; --claude:#d97757;
         --accent:#2dd4bf; --quote:#1c212b; --l:62%; --tick:#05070a;
-        --same-bar:#555b66; } }
+        --same-bar:#6e4b4b; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
        font:16px/1.55 Inter, -apple-system, 'Helvetica Neue', sans-serif; }
@@ -301,6 +302,10 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
 .score.big { font-size: 34px; }
 .score.none { color: var(--muted); }
 .better { color: var(--better); } .worse { color: var(--worse); } .same { color: var(--same); }
+.not-reproduced { color: var(--warn); } .rejected { color: var(--muted); }
+summary { list-style: none; } summary::-webkit-details-marker { display: none; }
+details > summary::before { content: '▸'; color: var(--muted); width: 1em; flex: none; }
+details[open] > summary::before { content: '▾'; }
 
 #scorecard { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
              padding: 36px 40px 28px; }
@@ -364,14 +369,15 @@ h2.section { font-size: 20px; margin: 40px 0 4px; }
 .counts { font-size: 14px; font-weight: 600; }
 .case { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
         padding: 12px 16px; margin: 10px 0; }
-.case > summary { display: flex; align-items: baseline; gap: 12px; cursor: pointer; }
+.case > summary { display: grid; grid-template-columns: 1em 12.5em minmax(0, 1fr) auto;
+                  align-items: baseline; column-gap: 10px; cursor: pointer; }
+.case > summary .tag { justify-self: start; }
 .case-title { flex: 1; min-width: 0; }
 .case-scores { font: 600 13px/1 'SF Mono', Menlo, monospace; color: var(--muted); white-space: nowrap; }
 .case[open] > summary { margin-bottom: 8px; }
 .tag { font: 600 13px/1 'SF Mono', Menlo, monospace; white-space: nowrap; }
 .tag.pill { padding: 4px 8px; border-radius: 999px; }
 .case-scores .score { font-size: 13px; }
-.tag.rejected, .tag.not-reproduced { color: var(--muted); }
 .complaint { color: var(--muted); font-size: 13.5px; margin: 4px 0 14px; }
 .shared { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
 .shared-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
@@ -469,6 +475,14 @@ btn.addEventListener('click', async () => {
 """
 
 
+def _signed(d: float, whole: bool = False) -> str:
+    """``+2.0``, ``−1.5``, or ``0`` for no change (``+2``, ``−1`` with ``whole``)."""
+    if round(d, 1) == 0:
+        return "0"
+    value = fmt(abs(d)) if whole else f"{abs(d):.1f}"
+    return f"{'+' if d > 0 else '−'}{value}"
+
+
 def _logo(model: str) -> str:
     if not model.startswith("claude"):
         return ""
@@ -478,9 +492,8 @@ def _logo(model: str) -> str:
 def _cat_item(i: dict) -> str:
     esc = html.escape
     d = i["new"] - i["reference"]
-    sign = "+" if d > 0 else "−" if d < 0 else "±"
     scores = (
-        f"<span class='delta'><b class='{i['outcome']}'>{sign}{abs(d):.1f}</b>"
+        f"<span class='delta'><b class='{i['outcome']}'>{_signed(d)}</b>"
         f"<small>{_score(i['reference'])} → {_score(i['new'])}</small></span>"
     )
     if "n" not in i:
@@ -672,7 +685,7 @@ def _case(r: dict) -> str:
     ref, new = r.get("reference"), r.get("new")
     if o in ("better", "same", "worse") and ref is not None and new is not None:
         d = new - ref
-        tag += f" {'+' if d > 0 else '−' if d < 0 else '±'}{fmt(abs(d))}"
+        tag += f" {_signed(d, whole=True)}"
         if o != "same":
             pct = round(12 + 48 * min(1.0, abs(d) / 9))
             style = f" style='background: color-mix(in srgb, var(--{o}) {pct}%, transparent)'"
