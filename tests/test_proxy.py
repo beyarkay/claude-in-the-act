@@ -179,3 +179,15 @@ def test_system_role_becomes_a_reminder_for_models_without_it(tmp_path):
     out = json.loads(rewrite_body(json.dumps(old).encode()))
     assert [m["role"] for m in out["messages"]] == ["user", "user", "assistant"]
     assert out["messages"][1]["content"] == [{"type": "text", "text": "hook said hi"}]
+
+
+def test_saved_requests_drop_fields_older_models_reject(tmp_path):
+    snap = tmp_path / "request.json"
+    first = _request("claude-opus-6", "Opus 6", f"{SENTINEL} capture={snap}")
+    first["messages"].insert(
+        1, {"role": "system", "content": "x", "output_config": {"effort": "low"}}
+    )
+    rewrite_body(json.dumps(first).encode())
+    old = _request("claude-opus-5", "Opus 5", f"{SENTINEL} use={snap}")
+    out = json.loads(rewrite_body(json.dumps(old).encode()))
+    assert all(set(m) <= {"role", "content"} for m in out["messages"])

@@ -125,6 +125,12 @@ def _as_reminders(messages: list[dict]) -> list[dict]:
     return out
 
 
+def _portable(messages: list[dict]) -> list[dict]:
+    """Messages with only role and content: newer models get extra per-message fields
+    (such as an effort setting) that older models' APIs reject."""
+    return [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
+
+
 def _capture(path: Path, obj: dict, context: list[dict]) -> None:
     if path.exists():
         return
@@ -132,7 +138,7 @@ def _capture(path: Path, obj: dict, context: list[dict]) -> None:
         "model": obj.get("model"),
         "system": obj.get("system"),
         "tools": obj.get("tools"),
-        "messages": context,
+        "messages": _portable(context),
     }
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(snap))
@@ -142,7 +148,7 @@ def _capture(path: Path, obj: dict, context: list[dict]) -> None:
 def _use(path: Path, obj: dict, notes: list[dict], after: list[dict]) -> dict:
     """``obj`` with the saved request's system prompt, tools and conversation."""
     snap = json.loads(path.read_text())
-    messages = snap["messages"] + after
+    messages = _portable(snap["messages"]) + after
     live_roles = {m.get("role") for m in [*obj["messages"], *notes]}
     if "system" not in live_roles:
         messages = _as_reminders(messages)
@@ -166,6 +172,7 @@ def rewrite_body(body: bytes) -> bytes:
     else:
         if mode == "capture" and where:
             _capture(Path(where), obj, before)
+            before = _portable(before)
         obj["messages"] = before + after
     if log := os.environ.get("SLASH_BAD_PROXY_LOG"):
         with open(log, "a") as f:
