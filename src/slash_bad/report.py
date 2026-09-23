@@ -294,8 +294,11 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
 .cat-row { display: flex; justify-content: space-between; gap: 12px; }
 .cat-row > span:last-child { flex: none; white-space: nowrap; }
 .h3-sub { font-size: 13px; color: var(--muted); margin: -6px 0 8px; }
-.cat-meta { display: flex; align-items: center; gap: 10px; font-size: 12.5px; margin-top: 4px; }
-.cat-meta .count { flex: none; font-weight: 600; min-width: 7.5em; }
+.cat-row { font-weight: 500; }
+.cat-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; margin-top: 4px;
+            color: var(--muted); opacity: .8; }
+.cat-meta .count { flex: none; min-width: 7.5em; }
+.cat-meta .bar { opacity: .65; }
 .bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; flex: none;
        max-width: 45%; border: 1.5px solid var(--tick); }
 .seg { flex: 1; } .seg + .seg { border-left: 1.5px solid var(--tick); }
@@ -421,9 +424,10 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
     return f"""
 <div id="scorecard">
   <h1 class="sc-title">/bad</h1>
-  <p class="sc-sub">A personal benchmark. Each transcript is a moment where an AI model's reply
-    annoyed me, with a note saying why. The same moment is re-run on the new model and on the old
-    one, and a judge that doesn't know which is which scores each reply against my note.</p>
+  <p class="sc-sub">A personal benchmark built from old transcripts where an AI model's reply
+    annoyed me, each with a note saying why. Every one of those moments is re-sampled on a newer
+    model and on the model that originally wrote it, and a judge that doesn't know which is which
+    scores both replies against my note.</p>
   <p class="sc-head">Of {s["scored"]} transcripts,
     <span class="model" style="color:{_model_color(new)}">{esc(pretty_model(new))}</span> scored:</p>
   <div class="tally">
@@ -431,7 +435,7 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
     <div class="worse"><b>{s["worse"]}</b>worse</div>
     <div class="same"><b>{s["same"]}</b>the same</div>
   </div>
-  <div class="muted">compared with {esc(olds)} on the same transcripts</div>
+  <div class="muted">at resolving my old complaints about {esc(olds)}</div>
   {avg}
   <div class="cats">
     <div>{heading("better", "Better")}{cat_list("better")}</div>
