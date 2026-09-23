@@ -250,7 +250,7 @@ REQUEST_FILE = "request.json"
 def _last_marker(context: list[dict]) -> str:
     """A string the final message of a faithful request must contain."""
     for r in reversed(context):
-        if r.get("type") not in ("user", "assistant") or r.get("isMeta"):
+        if r.get("type") not in ("user", "assistant"):
             continue
         content = (r.get("message") or {}).get("content")
         if isinstance(content, str):

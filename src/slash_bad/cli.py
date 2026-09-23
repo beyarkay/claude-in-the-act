@@ -163,6 +163,13 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_settle(args) -> int:
+    from slash_bad import settle
+
+    settle.settle(find_case(args.case), args.judge or load_config().get("judge"))
+    return 0
+
+
 def cmd_config(args) -> int:
     cfg = load_config()
     if args.key and args.value is not None:
@@ -280,6 +287,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("report", nargs="?", help="a report .json (default: the latest)")
     p.add_argument("--open", action="store_true")
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser("settle", help="re-run the old model and judge one case now")
+    p.add_argument("case")
+    p.add_argument("--judge")
+    p.set_defaults(fn=cmd_settle)
 
     p = sub.add_parser("baseline", help="judge the stored bad responses only (cheap)")
     p.add_argument("cases", nargs="*")

@@ -15,6 +15,7 @@ def isolated_home(tmp_path, monkeypatch):
     monkeypatch.setattr(slash_bad, "CASES_DIR", home / "cases")
     monkeypatch.setattr(store, "CASES_DIR", home / "cases")
     monkeypatch.delenv("SLASH_BAD_REPLAY", raising=False)
+    monkeypatch.setenv("SLASH_BAD_NO_SETTLE", "1")
     return home
 
 

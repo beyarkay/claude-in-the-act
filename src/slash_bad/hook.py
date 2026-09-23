@@ -50,6 +50,17 @@ def list_text() -> str:
     return "\n".join(lines)
 
 
+def _settle_later(case: Case) -> None:
+    from slash_bad import settle
+    from slash_bad.cli import load_config
+
+    if settle.enabled(load_config()):
+        try:
+            settle.spawn(case)
+        except OSError as e:
+            print(f"slash-bad: couldn't start the background re-run: {e}", file=sys.stderr)
+
+
 def capture(
     payload: dict, complaint: str, upto: int | None = None, extra: dict | None = None
 ) -> str:
@@ -66,6 +77,7 @@ def capture(
         upto=upto,
     )
     case = Case.create({**meta, "source": str(transcript), **(extra or {})}, context)
+    _settle_later(case)
     n = len(all_cases())
     flagged = " ".join(meta["flagged"].split())
     return (

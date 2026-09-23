@@ -73,3 +73,17 @@ def test_plant_text_sets_the_id_without_touching_content(cc_transcript):
     planted = [json.loads(line) for line in claude_code.plant_text(context, "NEW").splitlines()]
     assert {r["sessionId"] for r in planted if "sessionId" in r} == {"NEW"}
     assert [r.get("message") for r in planted] == [r.get("message") for r in context]
+
+
+def test_faithful_request_ends_where_the_context_ends():
+    from conftest import cc_assistant, cc_user
+
+    ctx = [
+        cc_user("what does it do?"),
+        cc_assistant([{"type": "text", "text": "Great question! It sums."}], "a1"),
+        cc_user("Stop hook feedback: cut the compliment", isMeta=True),
+    ]
+    good = {"messages": [{"role": "user", "content": "Stop hook feedback: cut the compliment"}]}
+    dropped = {"messages": [{"role": "user", "content": "what does it do?"}]}
+    assert claude_code.faithful(good, ctx)
+    assert not claude_code.faithful(dropped, ctx)
