@@ -251,11 +251,11 @@ def _pretty_date(when: datetime) -> str:
 
 _CSS = """
 :root { --bg:#f6f4f0; --fg:#1d1f23; --muted:#6b7079; --line:#e3dfd8; --card:#fff;
-        --better:#15803d; --worse:#b91c1c; --same:#6b7079; --claude:#c2410c; --accent:#0f766e;
+        --better:#15803d; --worse:#b91c1c; --same:#6b7079; --claude:#d97757; --accent:#0f766e;
         --quote:#f1eee8; --l:38%; --tick:#1d1f23; --same-bar:#c4c7cc; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --bg:#0e1116; --fg:#eceae6; --muted:#8d93a0; --line:#262b34;
-        --card:#151922; --better:#4ade80; --worse:#f87171; --same:#a1a6b0; --claude:#fb923c;
+        --card:#151922; --better:#4ade80; --worse:#f87171; --same:#a1a6b0; --claude:#d97757;
         --accent:#2dd4bf; --quote:#1c212b; --l:62%; --tick:#05070a;
         --same-bar:#555b66; } }
 * { box-sizing: border-box; }
@@ -281,7 +281,9 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
 .panel-label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 8px;
                display: flex; justify-content: space-between; gap: 8px; }
 .panel-label span { font-weight: 400; }
-.model { font-weight: 800; }
+.model { font-weight: 800; white-space: nowrap; }
+.logo { height: .9em; width: .9em; vertical-align: -.08em; margin-right: .25em; }
+.scale { text-align: center; font-size: 12px; color: var(--muted); margin-top: 6px; }
 .tally { display: flex; justify-content: space-around; gap: 16px; }
 .tally div { font-size: 15px; font-weight: 600; text-align: center; }
 .tally b { display: block; font-size: 40px; line-height: 1.05; font-weight: 800; }
@@ -359,6 +361,12 @@ btn.addEventListener('click', async () => {
 """
 
 
+def _logo(model: str) -> str:
+    if not model.startswith("claude"):
+        return ""
+    return (Path(__file__).parent / "assets" / "claude-symbol.svg").read_text().strip()
+
+
 def _cat_item(i: dict) -> str:
     esc = html.escape
     d = i["new"] - i["reference"]
@@ -369,6 +377,7 @@ def _cat_item(i: dict) -> str:
     )
     if "n" not in i:
         return f"<li><div class='cat-row'><span>“{esc(i['complaint'])}”</span>{scores}</div></li>"
+    label = i["complaint"] if i["outcome"] == "worse" else i.get("goal") or i["complaint"]
     t = i["tally"]
     segs = "".join(
         f"<span class='seg {k}'></span>" for k in ("better", "same", "worse") for _ in range(t[k])
@@ -377,20 +386,18 @@ def _cat_item(i: dict) -> str:
         f"{t[k]} {k if k != 'same' else 'the same'}" for k in ("better", "same", "worse") if t[k]
     ]
     return (
-        f"<li><div class='cat-row'><span>{esc(i.get('goal') or i['complaint'])}</span>{scores}</div>"
+        f"<li><div class='cat-row'><span>{esc(label)}</span>{scores}</div>"
         f"<div class='cat-meta'><span class='count'>{i['n']} transcript{'s' * (i['n'] != 1)}</span>"
         f"<span class='bar' style='width:{16 * i['n']}px'>{segs}</span>"
         f"<span class='muted'>{', '.join(parts)}</span></div></li>"
     )
 
 
-def _short_models(names: list[str]) -> str:
+def _short_models(names: list[str]) -> list[str]:
     pretty = [pretty_model(n) for n in names]
-    if len(pretty) > 2:
-        return "Older models"
     if all(n.startswith("Claude ") for n in pretty):
         pretty = [n.removeprefix("Claude ") for n in pretty]
-    return " & ".join(pretty)
+    return pretty
 
 
 def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
@@ -421,22 +428,25 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
     avg = ""
     if s["newMean"] is not None:
         old_mean = s["controlMean"] if s["controlled"] else s["flaggedMean"]
-        old_who = _short_models(s["oldModels"]) if s["controlled"] else "Your flagged replies"
+        short = _short_models(s["oldModels"])
+        old_who = " & ".join(short) if len(short) <= 2 else "Older models"
+        if not s["controlled"]:
+            old_who = "Your flagged replies"
         avg = (
-            "<div class='panel'><div class='panel-label'>Average judge score "
-            "<span>0 = problematic, 10 = fixed</span></div><div class='avg'>"
+            "<div class='panel'><div class='panel-label'>Average judge score</div><div class='avg'>"
             f"<div><div class='who'>{esc(old_who)}</div>{_score(old_mean, big=True)}</div>"
             "<div class='arrow'>→</div>"
             f"<div><div class='who'>{esc(pretty_model(new))}</div>"
-            f"{_score(s['newMean'], big=True)}</div></div></div>"
+            f"{_score(s['newMean'], big=True)}</div></div>"
+            "<div class='scale'>0 = problematic, 10 = fixed</div></div>"
         )
     return f"""
 <div id="scorecard">
   <h1 class="sc-title">/bad</h1>
   <p class="sc-sub">Old replies that annoyed me, re-sampled on a newer model and judged blind
     against my complaint.</p>
-  <p class="sc-head"><span class="model" style="color:{_model_color(new)}">{esc(pretty_model(new))}</span>
-    compared to older models</p>
+  <p class="sc-head"><span class="model" style="color:{_model_color(new)}">{_logo(new)}{esc(pretty_model(new))}</span>
+    compared to older models ({esc(", ".join(_short_models(s["oldModels"])))})</p>
   <div class="panels">
     {avg}
     <div class="panel"><div class="panel-label">Per-transcript changes
