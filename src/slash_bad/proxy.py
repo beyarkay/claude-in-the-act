@@ -240,6 +240,8 @@ class SentinelProxy:
                         self.wfile.write(f"{len(chunk):x}\r\n".encode() + chunk + b"\r\n")
                         self.wfile.flush()
                     self.wfile.write(b"0\r\n\r\n")
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # the client hung up early; nothing to deliver
                 finally:
                     up.close()
 

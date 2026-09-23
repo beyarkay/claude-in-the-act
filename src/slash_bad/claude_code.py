@@ -245,7 +245,9 @@ def resolve_model(model: str) -> str:
 
 
 REQUEST_FILE = "request.json"
-STANDARD_WINDOW = 190_000  # tokens; a session that sent more ran with the 1M-token window
+# Tokens. Claude Code compacts well before the standard window is full, and a replay's
+# system prompt can be larger than the original's, so switch to the 1M-token window early.
+STANDARD_WINDOW = 140_000
 
 
 def peak_request_tokens(context: list[dict]) -> int:
