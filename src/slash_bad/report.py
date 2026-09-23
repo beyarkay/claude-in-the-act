@@ -368,18 +368,18 @@ h2.section { font-size: 20px; margin: 40px 0 4px; }
 .counts { font-size: 14px; font-weight: 600; }
 .case { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
         padding: 12px 16px; margin: 10px 0; }
-.case > summary { display: grid; grid-template-columns: 1em 12em minmax(0, 1fr);
+.case > summary { display: grid; grid-template-columns: 1em 17em minmax(0, 1fr);
                   align-items: start; column-gap: 12px; cursor: pointer; }
 .status { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .tag.flag { font-weight: 400; display: inline-flex; align-items: center; gap: 5px; }
 .icon { width: 1.05em; height: 1.05em; flex: none; }
 .case-title { flex: 1; min-width: 0; }
 .case[open] .short, .case:not([open]) .full { display: none; }
-.case-scores { font: 600 13px/1 'SF Mono', Menlo, monospace; color: var(--muted); white-space: nowrap; }
+.case-scores { font-size: 12px; line-height: 1.2; color: var(--muted); white-space: nowrap; }
 .case[open] > summary { margin-bottom: 8px; }
 .tag { font: 600 13px/1 'SF Mono', Menlo, monospace; white-space: nowrap; }
 .tag.pill { padding: 4px 8px; border-radius: 999px; }
-.case-scores .score { font-size: 13px; }
+.case-scores .score { font-size: 12.5px; }
 .complaint { color: var(--muted); font-size: 13.5px; margin: 4px 0 14px; }
 .shared { border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; }
 .shared > summary { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
@@ -406,11 +406,30 @@ h2.section { font-size: 20px; margin: 40px 0 4px; }
 .md { white-space: pre-wrap; }
 .md.rendered { white-space: normal; }
 .md.rendered > :first-child { margin-top: 0; } .md.rendered > :last-child { margin-bottom: 0; }
-.md pre { overflow: auto; background: var(--quote); padding: 8px 10px; border-radius: 6px; font-size: 12.5px; }
+.md pre { max-width: 100%; overflow: auto; background: var(--quote); padding: 8px 10px; border-radius: 6px; font-size: 12.5px; }
 .md code { font-size: .92em; } .md table { border-collapse: collapse; font-size: 12.5px; }
 .md td, .md th { border: 1px solid var(--line); padding: 3px 6px; }
 .md h1, .md h2, .md h3 { font-size: 15px; margin: 12px 0 4px; }
-mark { background: color-mix(in srgb, var(--worse) 28%, transparent); color: inherit; border-radius: 3px; }
+mark { background: color-mix(in srgb, var(--accent) 26%, transparent); color: inherit; border-radius: 3px; }
+.reason { font-size: 12px; color: var(--muted); }
+.section-count { font-size: 14px; margin-bottom: 2px; }
+.counts .total { color: var(--muted); font-weight: 400; }
+@media (max-width: 700px) {
+  #scorecard { padding: 22px 16px; }
+  .sc-top { flex-direction: column; gap: 6px; } .sc-meta { text-align: left; }
+  .f-head { display: none; }
+  .finding { grid-template-columns: minmax(0, 1fr) auto; row-gap: 4px; }
+  .f-scores, .f-evidence { grid-column: 1 / -1; }
+  .f-evidence { flex-wrap: wrap; }
+  .behaviour > summary h3 { min-width: 0; overflow-wrap: anywhere; }
+  .case > summary { grid-template-columns: 1rem minmax(0, 1fr); row-gap: 6px; }
+  .case > summary .status, .case > summary .case-title { grid-column: 2; }
+  .case-title, .reply, .replies, .md { min-width: 0; }
+  .replies { display: block; }
+  .reply { display: block; margin-block: 14px; }
+  .bubble.bot { height: auto; max-height: none; }
+  .shared-peek { white-space: normal; }
+}
 .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
 .not-replayed { margin-top: 32px; } .not-replayed > summary { cursor: pointer; color: var(--muted); }
 """
@@ -634,7 +653,9 @@ def _shared(case_id: str) -> str:
     then = f"<div class='then'>then {' and '.join(work)}</div>" if work else ""
     return (
         "<details class='shared'><summary><span class='shared-label'>Context</span>"
-        f"<span class='shared-peek'>what you asked: “{esc(_one_line(prompt, 110))}”</span></summary>"
+        f"<span class='shared-peek'>what you asked: “{esc(_one_line(prompt, 90))}”"
+        + (f" · then {' and '.join(work)}" if work else "")
+        + "</span></summary>"
         "<div class='muted' style='font-size:12.5px;margin:6px 0'>The conversation up to here "
         "is identical for all three replies below; only the last reply was re-sampled.</div>"
         f"<div class='bubble user'><div class='bubble-label'>You asked</div>"
@@ -698,7 +719,15 @@ def _case(r: dict) -> str:
     if r.get("toolAttempts"):
         tried = "; ".join(_one_line(a, 80) for a in r["toolAttempts"][:3])
         note = f"<div class='note'>The new model tried to use tools first and was refused: {esc(tried)}</div>"
-    scores = " · ".join(_score(r.get(k)) for k in ("flagged", "control", "new"))
+    scores = " · ".join(
+        f"<span>{who} {_score(r.get(k))}</span>"
+        for who, k in (("Original", "flagged"), ("Asked again", "control"), ("New", "new"))
+    )
+    reason = {
+        "not-reproduced": "the old model, asked again, no longer did it",
+        "rejected": "the judge rejected "
+        + (r.get("rejected") or "a reply").split(": ", 1)[0].removeprefix("the "),
+    }.get(o, "")
     tag = f"{MARK[o]} {esc(LABEL.get(o, o))}"
     if o in ("not-reproduced", "rejected"):
         tag = f"{WARN_ICON} {esc(LABEL.get(o, o))}"
@@ -712,8 +741,9 @@ def _case(r: dict) -> str:
     kind = "pill" if style else "flag"
     return (
         f"<details class='case'><summary><span class='status'><span class='tag {kind} {o}'{style}>"
-        f"{tag}</span><span class='case-scores' title='original · old model asked again · new "
-        f"model'>{scores}</span></span>"
+        f"{tag}</span><span class='case-scores'>{scores}</span>"
+        + (f"<span class='reason'>{esc(reason)}</span>" if reason else "")
+        + "</span>"
         f"<span class='case-title'><span class='short'>{esc(_one_line(r['complaint'], 160))}</span>"
         f"<span class='full'><span class='muted'>User complaint: </span>{esc(r['complaint'])}"
         "</span></span></summary>"
@@ -735,7 +765,8 @@ def _behaviour_sections(rows: list[dict]) -> str:
         )
         out.append(
             f"<details class='behaviour' open><summary><h3>{esc(name)}</h3>"
-            f"<span class='counts'>{counts}</span></summary>"
+            f"<span class='counts'><span class='total'>{len(rs)} transcript"
+            f"{'s' * (len(rs) != 1)}:</span> {counts}</span></summary>"
             + "".join(_case(r) for r in _ordered(rs))
             + "</details>"
         )
@@ -755,9 +786,15 @@ def html_report(rows: list[dict], judge: str, when: datetime | None = None) -> s
         f"<title>/bad scorecard</title><style>{_CSS}</style></head><body><main>",
         _scorecard(rows, judge, when),
         f"<div class='actions'><button id='save-png' data-name='{esc(name)}'>Save as PNG</button></div>",
-        f"<h2 class='section'>Every transcript ({len(replayed)}), by behaviour</h2>",
-        "<div class='muted'>Scores are out of 10 (original · old model asked again · new model): "
-        "0 means the complaint applies in full, 10 means it no longer applies.</div>",
+        "<h2 class='section'>Every transcript, by behaviour</h2>",
+        f"<div class='section-count'>{len(replayed)} replayed: {s['scored']} counted, "
+        f"{s['notReproduced']} couldn't reproduce"
+        + (f", {s['rejected']} rejected" if s["rejected"] else "")
+        + (f" · {len(listed)} more not replayed (listed at the end)" if listed else "")
+        + "</div>",
+        "<div class='muted'>Each transcript shows three judge scores out of 10 (0 = problematic, "
+        "10 = fixed): the original reply, the old model asked again, and the new model. The "
+        "change in the badge is the new model minus the old model asked again.</div>",
         _behaviour_sections(replayed),
     ]
     if listed:
