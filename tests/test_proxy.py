@@ -158,6 +158,7 @@ def test_a_captured_request_is_replayed_for_another_model(tmp_path):
     later = _request("claude-opus-6", "Opus 6", f"{SENTINEL} use={snap}")
     later["messages"][0]["content"] = "a different history the resume made up"
     later["tools"] = [{"name": "NewTool"}]
+    later["system"] = [{"type": "text", "text": "a newer harness prompt"}]
     new_turn = {"role": "assistant", "content": [{"type": "text", "text": "tried a tool"}]}
     later["messages"].append(new_turn)
     out = json.loads(rewrite_body(json.dumps(later).encode()))
@@ -165,4 +166,16 @@ def test_a_captured_request_is_replayed_for_another_model(tmp_path):
     assert out["messages"][0]["content"] == "is it up?"
     assert out["messages"][-1] == new_turn
     assert out["tools"] == [{"name": "Bash"}]
-    assert out["system"][0]["text"] == "You are claude-opus-6."
+    assert out["system"] == first["system"]
+
+
+def test_system_role_becomes_a_reminder_for_models_without_it(tmp_path):
+    snap = tmp_path / "request.json"
+    first = _request("claude-opus-5", "Opus 5", f"{SENTINEL} capture={snap}")
+    first["messages"].insert(1, {"role": "system", "content": "hook said hi"})
+    rewrite_body(json.dumps(first).encode())
+    old = _request("claude-haiku-4-5", "Haiku 4.5", f"{SENTINEL} use={snap}")
+    old["messages"].pop(2)
+    out = json.loads(rewrite_body(json.dumps(old).encode()))
+    assert [m["role"] for m in out["messages"]] == ["user", "user", "assistant"]
+    assert out["messages"][1]["content"] == [{"type": "text", "text": "hook said hi"}]

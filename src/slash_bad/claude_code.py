@@ -27,7 +27,7 @@ from slash_bad.view import as_text, tool_call_text
 HARNESS = "claude-code"
 # Bump when a replay would come out differently for the same model, so stale
 # replays are never reused. v2: resume patches stripped around system messages.
-REPLAY_VERSION = 2
+REPLAY_VERSION = 3
 SYNTHETIC_MODEL = "<synthetic>"
 CLAUDE_TIMEOUT = 900
 DENY_REASON = (
@@ -244,10 +244,44 @@ def resolve_model(model: str) -> str:
     return "opus" if model in ("latest", "") else model
 
 
+REQUEST_FILE = "request.json"
+
+
+def _last_marker(context: list[dict]) -> str:
+    """A string the final message of a faithful request must contain."""
+    for r in reversed(context):
+        if r.get("type") not in ("user", "assistant") or r.get("isMeta"):
+            continue
+        content = (r.get("message") or {}).get("content")
+        if isinstance(content, str):
+            return content[:200]
+        for b in reversed(content or []):
+            if b.get("type") == "tool_result":
+                return b.get("tool_use_id", "")
+            if b.get("type") == "tool_use":
+                return b.get("id", "")
+            if b.get("type") == "text" and b.get("text"):
+                return b["text"][:200]
+    return ""
+
+
+def faithful(request: dict, context: list[dict]) -> bool:
+    """Whether the saved request ends where the stored conversation ends."""
+    marker = _last_marker(context)
+    msgs = request.get("messages") or []
+    return not marker or bool(msgs) and json.dumps(marker)[1:-1] in json.dumps(msgs[-1])
+
+
 def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
     """Regenerate the flagged message under ``model``. Returns a replay record:
     ``first`` is the model's first message (text plus any tool call it tried),
-    ``text`` is all the prose it produced once its tool calls were refused."""
+    ``text`` is all the prose it produced once its tool calls were refused.
+
+    The first replay of a case saves the request it sent (``request.json``);
+    every later replay sends exactly that request, whatever the model."""
+    saved = case.path / REQUEST_FILE
+    reuse = saved.exists()
+    prompt = f"{SENTINEL} {'use' if reuse else 'capture'}={saved}"
     tmp = Path(tempfile.mkdtemp(prefix="slash-bad-"))
     orig_cwd = case.meta.get("cwd") or ""
     workdir = Path(orig_cwd) if orig_cwd and Path(orig_cwd).is_dir() else tmp / "work"
@@ -264,7 +298,7 @@ def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
     cmd = [
         "claude",
         "-p",
-        SENTINEL,
+        prompt,
         "--resume",
         sid,
         "--model",
@@ -315,8 +349,17 @@ def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
             "returncode": rc,
         }
     )
+    result["sameRequest"] = reuse
     if rc != 0 or meta.get("is_error"):
         result["error"] = (meta.get("result") or err or out)[-600:]
+    elif not saved.exists():
+        result["error"] = "the replay never reached the model, so there is no saved request"
+    elif not reuse and not faithful(json.loads(saved.read_text()), context):
+        saved.rename(saved.with_suffix(".unfaithful.json"))
+        result["error"] = (
+            "Claude Code dropped the end of the stored conversation when resuming it, "
+            "so the model never saw the moment you flagged"
+        )
     return result
 
 

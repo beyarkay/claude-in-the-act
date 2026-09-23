@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import threading
 import urllib.error
 import urllib.request
@@ -116,35 +115,21 @@ def strip_sentinel(messages: list[dict]) -> list[dict]:
     return before + after
 
 
-_IDENTITY = re.compile(
-    r"You are powered by the model named (.+?)\. The exact model ID is ([\w.\-\[\]]+)"
-)
+def _as_reminders(messages: list[dict]) -> list[dict]:
+    """role:"system" messages as user text, for models that reject the system role."""
+    out = []
+    for m in messages:
+        if m.get("role") == "system":
+            m = {"role": "user", "content": [{"type": "text", "text": t} for t in _texts(m)]}
+        out.append(m)
+    return out
 
 
-def _identity(obj: dict, notes: list[dict]) -> tuple[str, str]:
-    """``(display name, model id)`` of the model this request is for."""
-    for m in notes:
-        for t in _texts(m):
-            if found := _IDENTITY.search(t):
-                return found.group(1), found.group(2)
-    return "", obj.get("model", "")
-
-
-def _swap(value, pairs: list[tuple[str, str]]):
-    text = json.dumps(value)
-    for old, new in pairs:
-        if old and new and old != new:
-            text = text.replace(json.dumps(old)[1:-1], json.dumps(new)[1:-1])
-    return json.loads(text)
-
-
-def _capture(path: Path, obj: dict, context: list[dict], notes: list[dict]) -> None:
+def _capture(path: Path, obj: dict, context: list[dict]) -> None:
     if path.exists():
         return
-    name, model_id = _identity(obj, notes)
     snap = {
-        "model": model_id,
-        "modelName": name,
+        "model": obj.get("model"),
         "system": obj.get("system"),
         "tools": obj.get("tools"),
         "messages": context,
@@ -157,14 +142,11 @@ def _capture(path: Path, obj: dict, context: list[dict], notes: list[dict]) -> N
 def _use(path: Path, obj: dict, notes: list[dict], after: list[dict]) -> dict:
     """``obj`` with the saved request's system prompt, tools and conversation."""
     snap = json.loads(path.read_text())
-    name, model_id = _identity(obj, notes)
-    pairs = [(snap.get("model", ""), model_id), (snap.get("modelName", ""), name)]
-    return {
-        **obj,
-        "system": _swap(snap["system"], pairs),
-        "tools": snap["tools"],
-        "messages": _swap(snap["messages"], pairs) + after,
-    }
+    messages = snap["messages"] + after
+    live_roles = {m.get("role") for m in [*obj["messages"], *notes]}
+    if "system" not in live_roles:
+        messages = _as_reminders(messages)
+    return {**obj, "system": snap["system"], "tools": snap["tools"], "messages": messages}
 
 
 def rewrite_body(body: bytes) -> bytes:
@@ -183,7 +165,7 @@ def rewrite_body(body: bytes) -> bytes:
         obj = _use(Path(where), obj, notes, after)
     else:
         if mode == "capture" and where:
-            _capture(Path(where), obj, before, notes)
+            _capture(Path(where), obj, before)
         obj["messages"] = before + after
     if log := os.environ.get("SLASH_BAD_PROXY_LOG"):
         with open(log, "a") as f:
