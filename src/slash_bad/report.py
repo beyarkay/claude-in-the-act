@@ -293,6 +293,10 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
            border-top: 1px solid var(--line); }
 .cat-row { display: flex; justify-content: space-between; gap: 12px; }
 .cat-row > span:last-child { flex: none; white-space: nowrap; }
+.delta { display: flex; flex-direction: column; align-items: center; min-width: 8.5em; }
+.delta b { font: 800 24px/1.1 'SF Mono', Menlo, monospace; }
+.delta small .score { font-size: 11.5px; font-weight: 600; }
+.delta small { color: var(--muted); font-size: 11.5px; }
 .h3-sub { font-size: 13px; color: var(--muted); margin: -6px 0 8px; }
 .cat-row { font-weight: 500; }
 .cat-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; margin-top: 4px;
@@ -355,7 +359,12 @@ btn.addEventListener('click', async () => {
 
 def _cat_item(i: dict) -> str:
     esc = html.escape
-    scores = f"<span>{_score(i['reference'])} → {_score(i['new'])}</span>"
+    d = i["new"] - i["reference"]
+    sign = "+" if d > 0 else "−" if d < 0 else "±"
+    scores = (
+        f"<span class='delta'><b class='{i['outcome']}'>{sign}{abs(d):.1f}</b>"
+        f"<small>{_score(i['reference'])} → {_score(i['new'])}</small></span>"
+    )
     if "n" not in i:
         return f"<li><div class='cat-row'><span>{esc(i['complaint'])}</span>{scores}</div></li>"
     t = i["tally"]
