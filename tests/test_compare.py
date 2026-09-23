@@ -112,6 +112,7 @@ def test_reports_render(case, fakes, tmp_path, monkeypatch):
         ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
         ("gpt-6-sol", "GPT-6 Sol"),
         ("gpt-5.6-sol", "GPT-5.6 Sol"),
+        ("openai/gpt-6-luna", "GPT-6 Luna"),
         ("opus", "opus"),
     ],
 )

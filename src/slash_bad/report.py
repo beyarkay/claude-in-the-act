@@ -258,7 +258,8 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
 
 def pretty_model(name: str) -> str:
     """``claude-opus-5-5`` → ``Claude Opus 5.5``, ``gpt-6-sol`` → ``GPT-6 Sol``."""
-    parts = [p for p in (name or "").split("-") if not (p.isdigit() and len(p) == 8)]
+    name = (name or "").rsplit("/", 1)[-1].removeprefix("codex:")
+    parts = [p for p in name.split("-") if not (p.isdigit() and len(p) == 8)]
     if parts[:1] == ["claude"] and len(parts) > 1:
         version = ".".join(p for p in parts[2:] if p.replace(".", "").isdigit())
         rest = [p.title() for p in parts[2:] if not p.replace(".", "").isdigit()]
