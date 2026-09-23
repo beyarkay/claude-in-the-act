@@ -33,7 +33,7 @@ def fakes(monkeypatch):
 
     def fake_score(complaint, earlier, turn, response, judge_model="opus"):
         calls["judge"].append(response)
-        score = 9 if "down" in response else (5 if "probably" in response else 0)
+        score = 9 if "down" in response else (3 if "probably" in response else 0)
         return {"score": score, "rationale": "r", "judgeModel": "judge-x", "costUsd": 0.01}
 
     monkeypatch.setattr(claude_code, "replay", fake_replay)
@@ -43,7 +43,7 @@ def fakes(monkeypatch):
 
 def test_new_model_is_compared_with_the_old_model_rerun(case, fakes):
     row = compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
-    assert (row["flagged"], row["control"], row["new"]) == (0, 5, 9)
+    assert (row["flagged"], row["control"], row["new"]) == (0, 3, 9)
     assert row["vs"] == "control" and row["outcome"] == "better"
     assert sorted(fakes["replay"]) == ["claude-opus-5", "new-model"]
 
@@ -97,7 +97,7 @@ def test_reports_render(case, fakes, tmp_path, monkeypatch):
     monkeypatch.setattr(report, "REPORTS_DIR", tmp_path / "reports")
     rows = [compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)]
     text = report.terminal(rows, "opus", color=False)
-    assert "better   1" in text and "1 transcripts" in text
+    assert "▲ better           1" in text and "1 transcripts" in text
     paths = report.write_all(rows, "opus")
     page = paths["html"].read_text()
     assert "server is up" in page and 'id="scorecard"' in page
@@ -209,3 +209,11 @@ def test_headline_reads_as_a_sentence(case, fakes):
         "According to slash-bad, new-model is better on 1 of the 1 moments that annoyed me, "
         "compared with claude-opus-5."
     )
+
+
+@pytest.mark.parametrize("flagged,control,want", [(1, 4, "better"), (1, 5, "not-reproduced")])
+def test_reproduced_means_the_old_model_asked_again_is_close_to_the_original(
+    flagged, control, want
+):
+    row = {"outcome": "better", "vs": "control", "flagged": flagged, "reference": control}
+    assert compare.classify(row)["outcome"] == want

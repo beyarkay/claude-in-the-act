@@ -31,12 +31,12 @@ MARK = {
     "not-reproduced": "○",
 }
 SKIPPED = ("error", "unmatched", "same-model", "rejected", "not-reproduced")
-LABEL = {"same": "the same", "not-reproduced": "couldn't reproduce complaint"}
+LABEL = {"same": "no improvement", "not-reproduced": "couldn't reproduce"}
 COUNT_ORDER = ("better", "worse", "same", "not-reproduced", "rejected")
 WHY_SKIPPED = {
     "unmatched": "the judge couldn't find the complaint in the flagged reply",
     "same-model": "the flagged reply came from the model being tested",
-    "not-reproduced": "couldn't reproduce the complaint: the old model, asked again, scored above 7",
+    "not-reproduced": "couldn't reproduce: the old model, asked again, scored well above the original",
 }
 
 
@@ -142,7 +142,7 @@ def headline(rows: list[dict]) -> str:
         unit, total = "moments that annoyed me", s["scored"]
     parts = [f"better on {n['better']}"]
     if n["same"]:
-        parts.append(f"the same on {n['same']}")
+        parts.append(f"no improvement on {n['same']}")
     if n["worse"]:
         parts.append(f"worse on {n['worse']}")
     joined = ", ".join(parts[:-1]) + (" and " if len(parts) > 1 else "") + parts[-1]
@@ -163,7 +163,11 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
     ]
     out.append(f"  {s['scored']} transcripts:")
     width = max(s["better"], s["same"], s["worse"], 1)
-    for key, label in (("better", "better"), ("same", "same  "), ("worse", "worse ")):
+    for key, label in (
+        ("better", "better        "),
+        ("same", "no improvement"),
+        ("worse", "worse         "),
+    ):
         bar = "■" * round(20 * s[key] / width) if s[key] else ""
         out.append(f"  {c(_color(key))}{MARK[key]} {label} {s[key]:>3}  {bar}{c(RESET)}")
     if s["errors"]:
@@ -180,7 +184,7 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
         n = Counter(g["outcome"] for g in gs)
         out += [
             "",
-            f"{c(BOLD)}{len(gs)} behaviours{c(RESET)}: better on {n['better']}, same on {n['same']}, "
+            f"{c(BOLD)}{len(gs)} behaviours{c(RESET)}: better on {n['better']}, no improvement on {n['same']}, "
             f"worse on {n['worse']}  {c(DIM)}(old model → new model, transcripts){c(RESET)}",
         ]
         for g in _ordered(gs):
@@ -365,6 +369,8 @@ h2.section { font-size: 20px; margin: 40px 0 4px; }
 .case-scores { font: 600 13px/1 'SF Mono', Menlo, monospace; color: var(--muted); white-space: nowrap; }
 .case[open] > summary { margin-bottom: 8px; }
 .tag { font: 600 13px/1 'SF Mono', Menlo, monospace; white-space: nowrap; }
+.tag.pill { padding: 4px 8px; border-radius: 999px; }
+.case-scores .score { font-size: 13px; }
 .tag.rejected, .tag.not-reproduced { color: var(--muted); }
 .complaint { color: var(--muted); font-size: 13.5px; margin: 4px 0 14px; }
 .shared { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
@@ -484,9 +490,7 @@ def _cat_item(i: dict) -> str:
     segs = "".join(
         f"<span class='seg {k}'></span>" for k in ("better", "same", "worse") for _ in range(t[k])
     )
-    parts = [
-        f"{t[k]} {k if k != 'same' else 'the same'}" for k in ("better", "same", "worse") if t[k]
-    ]
+    parts = [f"{t[k]} {LABEL.get(k, k)}" for k in ("better", "same", "worse") if t[k]]
     return (
         f"<li><div class='cat-row'><span>{esc(label)}</span>{scores}</div>"
         f"<div class='cat-meta'><span class='count'>{i['n']} transcript{'s' * (i['n'] != 1)}</span>"
@@ -526,7 +530,9 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
         )
         return f"<h3 class='{key}'>{label}</h3>{sub}{body}"
 
-    unchanged = f"<div class='cats-same'>{section('same', 'Unchanged')}</div>" if by["same"] else ""
+    unchanged = (
+        f"<div class='cats-same'>{section('same', 'No improvement')}</div>" if by["same"] else ""
+    )
     avg = ""
     if s["newMean"] is not None:
         old_mean = s["controlMean"] if s["controlled"] else s["flaggedMean"]
@@ -556,7 +562,7 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
       <div class="tally">
         <div class="better"><b>{s["better"]}</b>better</div>
         <div class="worse"><b>{s["worse"]}</b>worse</div>
-        <div class="same"><b>{s["same"]}</b>the same</div>
+        <div class="same"><b>{s["same"]}</b>no improvement</div>
       </div></div>
   </div>
   <div class="cats">
@@ -660,9 +666,18 @@ def _case(r: dict) -> str:
     if r.get("toolAttempts"):
         tried = "; ".join(_one_line(a, 80) for a in r["toolAttempts"][:3])
         note = f"<div class='note'>The new model tried to use tools first and was refused: {esc(tried)}</div>"
-    scores = " · ".join(fmt(r.get(k)) for k in ("flagged", "control", "new"))
+    scores = " · ".join(_score(r.get(k)) for k in ("flagged", "control", "new"))
+    tag = f"{MARK[o]} {esc(LABEL.get(o, o))}"
+    style = ""
+    ref, new = r.get("reference"), r.get("new")
+    if o in ("better", "same", "worse") and ref is not None and new is not None:
+        d = new - ref
+        tag += f" {'+' if d > 0 else '−' if d < 0 else '±'}{fmt(abs(d))}"
+        if o != "same":
+            pct = round(12 + 48 * min(1.0, abs(d) / 9))
+            style = f" style='background: color-mix(in srgb, var(--{o}) {pct}%, transparent)'"
     return (
-        f"<details class='case'><summary><span class='tag {o}'>{MARK[o]} {esc(LABEL.get(o, o))}"
+        f"<details class='case'><summary><span class='tag pill {o}'{style}>{tag}"
         f"</span><span class='case-title'>{esc(_one_line(r['complaint'], 120))}</span>"
         f"<span class='case-scores' title='original · old model asked again · new model'>"
         f"{scores}</span></summary>"
