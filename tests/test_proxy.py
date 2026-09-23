@@ -3,7 +3,14 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.request import Request, urlopen
 
-from slash_bad.proxy import CONTINUE_NUDGE, NO_RESPONSE, SENTINEL, SentinelProxy, strip_sentinel
+from slash_bad.proxy import (
+    CONTINUE_NUDGE,
+    NO_RESPONSE,
+    SENTINEL,
+    SentinelProxy,
+    rewrite_body,
+    strip_sentinel,
+)
 
 
 def _msgs():
@@ -108,5 +115,54 @@ def test_strip_handles_system_messages_between_the_patches():
         {"role": "user", "content": [{"type": "text", "text": SENTINEL}]},
     ]
     out = strip_sentinel(msgs)
-    assert [m["role"] for m in out] == ["user", "assistant", "user", "system", "system"]
+    assert [m["role"] for m in out] == ["user", "assistant", "user"]
     assert out[2]["content"] == [{"type": "tool_result", "tool_use_id": "t", "content": "ok"}]
+
+
+def test_system_messages_inside_the_context_stay():
+    msgs = [
+        {"role": "user", "content": "run it"},
+        {"role": "system", "content": "hook said hi"},
+        {"role": "assistant", "content": [{"type": "text", "text": "ran it"}]},
+        {"role": "system", "content": "Today's date is 2099-01-01."},
+        {"role": "user", "content": [{"type": "text", "text": SENTINEL}]},
+    ]
+    assert [m["content"] for m in strip_sentinel(msgs)][1] == "hook said hi"
+    assert len(strip_sentinel(msgs)) == 3
+
+
+def _request(model, name, sentinel_text, extra=()):
+    return {
+        "model": model,
+        "system": [{"type": "text", "text": f"You are {model}."}],
+        "tools": [{"name": "Bash"}],
+        "messages": [
+            {"role": "user", "content": "is it up?"},
+            {"role": "assistant", "content": [{"type": "text", "text": "checking"}]},
+            {
+                "role": "system",
+                "content": f"You are powered by the model named {name}. The exact model ID is {model}.",
+            },
+            {"role": "user", "content": [{"type": "text", "text": sentinel_text}]},
+            *extra,
+        ],
+    }
+
+
+def test_a_captured_request_is_replayed_for_another_model(tmp_path):
+    snap = tmp_path / "request.json"
+    first = _request("claude-opus-5", "Opus 5", f"{SENTINEL} capture={snap}")
+    sent = json.loads(rewrite_body(json.dumps(first).encode()))
+    assert len(sent["messages"]) == 2 and snap.exists()
+
+    later = _request("claude-opus-6", "Opus 6", f"{SENTINEL} use={snap}")
+    later["messages"][0]["content"] = "a different history the resume made up"
+    later["tools"] = [{"name": "NewTool"}]
+    new_turn = {"role": "assistant", "content": [{"type": "text", "text": "tried a tool"}]}
+    later["messages"].append(new_turn)
+    out = json.loads(rewrite_body(json.dumps(later).encode()))
+    assert out["model"] == "claude-opus-6"
+    assert out["messages"][0]["content"] == "is it up?"
+    assert out["messages"][-1] == new_turn
+    assert out["tools"] == [{"name": "Bash"}]
+    assert out["system"][0]["text"] == "You are claude-opus-6."

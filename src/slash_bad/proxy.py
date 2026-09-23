@@ -18,10 +18,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 SENTINEL = "SLASH_BAD_RESUME_SENTINEL_9c41e7"
 CONTINUE_NUDGE = "Continue from where you left off."
@@ -50,37 +52,119 @@ def _has_sentinel(msg: dict) -> bool:
     return msg.get("role") == "user" and any(SENTINEL in t for t in _texts(msg))
 
 
+def _is_patch(m: dict) -> bool:
+    return m.get("role") == "assistant" and [t.strip() for t in _texts(m)] == [NO_RESPONSE]
+
+
+def _drop_nudge(m: dict) -> dict | None:
+    content = m.get("content")
+    if m.get("role") != "user" or not isinstance(content, list):
+        return m
+    kept = [
+        b
+        for b in content
+        if not (
+            isinstance(b, dict)
+            and b.get("type") == "text"
+            and b.get("text", "").strip() == CONTINUE_NUDGE
+        )
+    ]
+    return {**m, "content": kept} if kept else None
+
+
+def split_sentinel(messages: list[dict]) -> tuple[list[dict], list[dict], list[dict], str] | None:
+    """``(context, resume_notes, new_turns, directive)``, or None without a sentinel.
+
+    ``context`` is the stored conversation with the resume patches removed.
+    ``resume_notes`` are the role:"system" messages Claude Code adds when it
+    resumes (today's date, the environment, files changed on disk since, hook
+    output); they sit next to the sentinel once the patches are gone.
+    ``new_turns`` is what the model has done since, and ``directive`` the text
+    after the sentinel.
+    """
+    k = next((i for i, m in enumerate(messages) if _has_sentinel(m)), None)
+    if k is None:
+        return None
+    directive = next(t for t in _texts(messages[k]) if SENTINEL in t).split(SENTINEL, 1)[1]
+
+    def clean(ms: list[dict]) -> list[dict]:
+        out = []
+        for m in ms:
+            if not _is_patch(m) and (m := _drop_nudge(m)) is not None:
+                out.append(m)
+        return out
+
+    before, after = clean(messages[:k]), clean(messages[k + 1 :])
+    notes = []
+    while before and before[-1].get("role") == "system":
+        notes.insert(0, before.pop())
+    while after and after[0].get("role") == "system":
+        notes.append(after.pop(0))
+    return before, notes, after, directive.strip()
+
+
 def strip_sentinel(messages: list[dict]) -> list[dict]:
-    """Remove the sentinel turn and the resume patches around it.
+    """The request without the sentinel turn, the resume patches or the resume notes.
 
     Returns ``messages`` unchanged when there is no sentinel (side requests such
     as title generation, or the judge).
     """
-    k = next((i for i, m in enumerate(messages) if _has_sentinel(m)), None)
-    if k is None:
+    parts = split_sentinel(messages)
+    if parts is None:
         return messages
-    out = []
-    # Newer models get mid-conversation role:"system" messages, so the patches
-    # aren't necessarily adjacent to the sentinel; remove them wherever they are.
-    for m in messages[:k] + messages[k + 1 :]:
-        if m.get("role") == "assistant" and [t.strip() for t in _texts(m)] == [NO_RESPONSE]:
-            continue
-        content = m.get("content")
-        if m.get("role") == "user" and isinstance(content, list):
-            kept = [
-                b
-                for b in content
-                if not (
-                    isinstance(b, dict)
-                    and b.get("type") == "text"
-                    and b.get("text", "").strip() == CONTINUE_NUDGE
-                )
-            ]
-            if not kept:
-                continue
-            m = {**m, "content": kept}
-        out.append(m)
-    return out
+    before, _, after, _ = parts
+    return before + after
+
+
+_IDENTITY = re.compile(
+    r"You are powered by the model named (.+?)\. The exact model ID is ([\w.\-\[\]]+)"
+)
+
+
+def _identity(obj: dict, notes: list[dict]) -> tuple[str, str]:
+    """``(display name, model id)`` of the model this request is for."""
+    for m in notes:
+        for t in _texts(m):
+            if found := _IDENTITY.search(t):
+                return found.group(1), found.group(2)
+    return "", obj.get("model", "")
+
+
+def _swap(value, pairs: list[tuple[str, str]]):
+    text = json.dumps(value)
+    for old, new in pairs:
+        if old and new and old != new:
+            text = text.replace(json.dumps(old)[1:-1], json.dumps(new)[1:-1])
+    return json.loads(text)
+
+
+def _capture(path: Path, obj: dict, context: list[dict], notes: list[dict]) -> None:
+    if path.exists():
+        return
+    name, model_id = _identity(obj, notes)
+    snap = {
+        "model": model_id,
+        "modelName": name,
+        "system": obj.get("system"),
+        "tools": obj.get("tools"),
+        "messages": context,
+    }
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(snap))
+    tmp.replace(path)
+
+
+def _use(path: Path, obj: dict, notes: list[dict], after: list[dict]) -> dict:
+    """``obj`` with the saved request's system prompt, tools and conversation."""
+    snap = json.loads(path.read_text())
+    name, model_id = _identity(obj, notes)
+    pairs = [(snap.get("model", ""), model_id), (snap.get("modelName", ""), name)]
+    return {
+        **obj,
+        "system": _swap(snap["system"], pairs),
+        "tools": snap["tools"],
+        "messages": _swap(snap["messages"], pairs) + after,
+    }
 
 
 def rewrite_body(body: bytes) -> bytes:
@@ -90,10 +174,17 @@ def rewrite_body(body: bytes) -> bytes:
         return body
     if not isinstance(obj, dict) or not isinstance(obj.get("messages"), list):
         return body
-    stripped = strip_sentinel(obj["messages"])
-    if stripped is obj["messages"]:
+    parts = split_sentinel(obj["messages"])
+    if parts is None:
         return body
-    obj["messages"] = stripped
+    before, notes, after, directive = parts
+    mode, _, where = directive.partition("=")
+    if mode == "use" and where:
+        obj = _use(Path(where), obj, notes, after)
+    else:
+        if mode == "capture" and where:
+            _capture(Path(where), obj, before, notes)
+        obj["messages"] = before + after
     if log := os.environ.get("SLASH_BAD_PROXY_LOG"):
         with open(log, "a") as f:
             f.write(json.dumps(obj) + "\n")
