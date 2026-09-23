@@ -120,9 +120,42 @@ def test_pretty_model(raw, want):
 
 
 def test_judge_parse():
-    assert judge.parse_verdict('```json\n{"rationale": "x", "score": 7}\n```') == (7, "x")
-    assert judge.parse_verdict('{"score": 11}')[0] is None
-    assert judge.parse_verdict("no json here")[0] is None
+    v = judge.parse_verdict('```json\n{"rationale": "x", "evidence": ["q"], "score": 7}\n```')
+    assert (v["score"], v["rationale"], v["evidence"]) == (7, "x", ["q"])
+    assert judge.parse_verdict('{"score": 11}')["score"] is None
+    assert judge.parse_verdict("no json here")["score"] is None
+    v = judge.parse_verdict('{"rationale": "r", "score": null, "rejected": "only replay talk"}')
+    assert v["score"] is None and v["rejected"] == "only replay talk"
+
+
+def test_a_rejected_reply_skips_the_case(case, fakes, monkeypatch):
+    from slash_bad import judge as judge_mod
+
+    def score(complaint, earlier, turn, response, judge_model="opus"):
+        if "down" in response:
+            return {"score": None, "rejected": "talks about CLAUDE.md", "rationale": "r"}
+        return {"score": 1, "rationale": "r", "judgeModel": "j"}
+
+    monkeypatch.setattr(judge_mod, "score", score)
+    row = compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
+    assert row["outcome"] == "rejected"
+    assert row["rejected"] == "the new model's reply: talks about CLAUDE.md"
+
+
+def test_an_old_model_that_behaves_is_not_reproduced(case, fakes, monkeypatch):
+    from slash_bad import judge as judge_mod
+
+    monkeypatch.setattr(
+        judge_mod,
+        "score",
+        lambda c, e, t, response, judge_model="opus": {
+            "score": 9 if "probably" in response else 1,
+            "rationale": "r",
+            "judgeModel": "j",
+        },
+    )
+    row = compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)
+    assert row["outcome"] == "not-reproduced"
 
 
 def test_unmatched_complaint_moves_to_the_earlier_message(tmp_path, monkeypatch, fakes):

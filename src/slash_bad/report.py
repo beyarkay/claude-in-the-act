@@ -20,8 +20,22 @@ GREEN, RED, GREY, BOLD, DIM, RESET = (
     "\x1b[2m",
     "\x1b[0m",
 )
-MARK = {"better": "▲", "worse": "▼", "same": "●", "error": "✗", "unmatched": "?", "same-model": "="}
-SKIPPED = ("error", "unmatched", "same-model")
+MARK = {
+    "better": "▲",
+    "worse": "▼",
+    "same": "●",
+    "error": "✗",
+    "unmatched": "?",
+    "same-model": "=",
+    "rejected": "⊘",
+    "not-reproduced": "○",
+}
+SKIPPED = ("error", "unmatched", "same-model", "rejected", "not-reproduced")
+WHY_SKIPPED = {
+    "unmatched": "the judge couldn't find the complaint in the flagged reply",
+    "same-model": "the flagged reply came from the model being tested",
+    "not-reproduced": "the old model, asked again, didn't repeat the problem (scored above 7)",
+}
 
 
 def _color(outcome: str) -> str:
@@ -52,6 +66,8 @@ def summary(rows: list[dict]) -> dict:
         "errors": counts["error"],
         "unmatched": counts["unmatched"],
         "sameModel": counts["same-model"],
+        "rejected": counts["rejected"],
+        "notReproduced": counts["not-reproduced"],
         "scored": len(scored),
         "flaggedMean": _mean([r["flagged"] for r in scored if r.get("flagged") is not None]),
         "controlMean": _mean([r["control"] for r in with_control]),
@@ -99,7 +115,7 @@ def groups(rows: list[dict]) -> list[dict]:
 
 
 def _ordered(rows: list[dict]) -> list[dict]:
-    rank = {"better": 0, "worse": 1, "same": 2, "unmatched": 3, "same-model": 4, "error": 5}
+    rank = {k: i for i, k in enumerate(("better", "worse", "same", *SKIPPED))}
     return sorted(
         rows,
         key=lambda r: (rank[r["outcome"]], -abs((r.get("new") or 0) - (r.get("reference") or 0))),
@@ -180,7 +196,7 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
             out.append(f"  {mark} error{c(RESET)}  {_one_line(r['complaint'], 70)}")
             out.append(f"      {c(DIM)}{_one_line(r.get('error', ''), 100)}{c(RESET)}")
             continue
-        if r["outcome"] in ("unmatched", "same-model"):
+        if r["outcome"] in SKIPPED:
             continue
         scores = f"{fmt(r['reference']):>3} → {fmt(r['new']):<3}"
         out.append(f"  {mark} {scores}{c(RESET)} {_one_line(r['complaint'], 76)}")
@@ -190,6 +206,16 @@ def terminal(rows: list[dict], judge: str, color: bool | None = None) -> str:
         notes.append(
             f"{s['unmatched']} case(s) skipped: the judge couldn't find the complaint in the flagged "
             "message or the ones just before it, so a replay wouldn't measure it."
+        )
+    if s["notReproduced"]:
+        notes.append(
+            f"{s['notReproduced']} case(s) skipped: asked again, the old model didn't repeat "
+            "the problem, so the replay can't show whether the new model fixed it."
+        )
+    if s["rejected"]:
+        notes.append(
+            f"{s['rejected']} case(s) skipped: the judge said a reply couldn't be judged "
+            "against the complaint (see the report for why)."
         )
     if s["sameModel"]:
         notes.append(
@@ -524,7 +550,7 @@ def html_report(rows: list[dict], judge: str, when: datetime | None = None) -> s
     if skipped:
         items = "".join(
             f"<li>“{esc(_one_line(r['complaint'], 140))}”: "
-            f"{esc(r.get('error') or ('the flagged reply came from the new model' if r['outcome'] == 'same-model' else 'the judge could not find this complaint in the flagged reply'))}</li>"
+            f"{esc(r.get('error') or r.get('rejected') or WHY_SKIPPED.get(r['outcome'], r['outcome']))}</li>"
             for r in skipped
         )
         parts.append(
