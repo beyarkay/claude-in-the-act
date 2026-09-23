@@ -184,10 +184,12 @@ def test_system_role_becomes_a_reminder_for_models_without_it(tmp_path):
 def test_saved_requests_drop_fields_older_models_reject(tmp_path):
     snap = tmp_path / "request.json"
     first = _request("claude-opus-6", "Opus 6", f"{SENTINEL} capture={snap}")
-    first["messages"].insert(
-        1, {"role": "system", "content": "x", "output_config": {"effort": "low"}}
-    )
+    for content in ("x", []):
+        first["messages"].insert(
+            1, {"role": "system", "content": content, "output_config": {"effort": "low"}}
+        )
     rewrite_body(json.dumps(first).encode())
     old = _request("claude-opus-5", "Opus 5", f"{SENTINEL} use={snap}")
     out = json.loads(rewrite_body(json.dumps(old).encode()))
-    assert all(set(m) <= {"role", "content"} for m in out["messages"])
+    assert all(set(m) <= {"role", "content"} and m["content"] for m in out["messages"])
+    assert len(out["messages"]) == 3
