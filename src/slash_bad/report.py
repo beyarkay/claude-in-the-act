@@ -94,7 +94,7 @@ def summary(rows: list[dict]) -> dict:
 def groups(rows: list[dict]) -> list[dict]:
     """Rows pooled by behaviour: mean scores and one outcome per behaviour."""
     from slash_bad.behaviours import goals
-    from slash_bad.compare import GROUP_BETTER_BY, outcome
+    from slash_bad.compare import group_outcome
 
     wanted = goals()
     by: dict[str, list[dict]] = {}
@@ -114,7 +114,7 @@ def groups(rows: list[dict]) -> list[dict]:
                 "control": _mean(ctl) if len(ctl) == len(rs) else None,
                 "reference": ref,
                 "new": new,
-                "outcome": outcome(ref, new, GROUP_BETTER_BY),
+                "outcome": group_outcome(Counter(r["outcome"] for r in rs)),
                 "cases": [r["case"] for r in rs],
                 "tally": Counter(r["outcome"] for r in rs),
             }

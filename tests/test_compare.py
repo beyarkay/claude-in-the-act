@@ -220,3 +220,18 @@ def test_reproduced_means_the_old_model_asked_again_is_close_to_the_original(
 ):
     row = {"outcome": "better", "vs": "control", "flagged": flagged, "reference": control}
     assert compare.classify(row)["outcome"] == want
+
+
+@pytest.mark.parametrize(
+    "tally,want",
+    [
+        ({"same": 1}, "same"),
+        ({"better": 2, "same": 2}, "better"),
+        ({"better": 1, "same": 5}, "same"),
+        ({"same": 3, "worse": 1}, "same"),
+        ({"worse": 2}, "worse"),
+        ({"better": 2, "worse": 1, "same": 1}, "same"),
+    ],
+)
+def test_a_behaviour_outcome_follows_its_transcripts(tally, want):
+    assert compare.group_outcome(tally) == want
