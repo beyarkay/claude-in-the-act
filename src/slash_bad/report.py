@@ -69,7 +69,7 @@ def summary(rows: list[dict]) -> dict:
 
 def groups(rows: list[dict]) -> list[dict]:
     """Rows pooled by behaviour: mean scores and one outcome per behaviour."""
-    from slash_bad.compare import outcome
+    from slash_bad.compare import GROUP_BETTER_BY, outcome
 
     by: dict[str, list[dict]] = {}
     for r in rows:
@@ -87,7 +87,7 @@ def groups(rows: list[dict]) -> list[dict]:
                 "control": _mean(ctl) if len(ctl) == len(rs) else None,
                 "reference": ref,
                 "new": new,
-                "outcome": outcome(ref, new),
+                "outcome": outcome(ref, new, GROUP_BETTER_BY),
                 "cases": [r["case"] for r in rs],
                 "tally": Counter(r["outcome"] for r in rs),
             }
@@ -248,17 +248,18 @@ def _score(v: float | None, big: bool = False) -> str:
 
 
 def _pretty_date(when: datetime) -> str:
-    return f"{when.day} {when.strftime('%B %Y')}"
+    return f"{when.day} {when.strftime('%b').replace('Sep', 'Sept')} {when.year}"
 
 
 _CSS = """
 :root { --bg:#f6f4f0; --fg:#1d1f23; --muted:#6b7079; --line:#e3dfd8; --card:#fff;
         --better:#15803d; --worse:#b91c1c; --same:#6b7079; --claude:#c2410c; --accent:#0f766e;
-        --quote:#f1eee8; --l:38%; }
+        --quote:#f1eee8; --l:38%; --tick:#1d1f23; --same-bar:#c4c7cc; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --bg:#0e1116; --fg:#eceae6; --muted:#8d93a0; --line:#262b34;
         --card:#151922; --better:#4ade80; --worse:#f87171; --same:#a1a6b0; --claude:#fb923c;
-        --accent:#2dd4bf; --quote:#1c212b; --l:62%; } }
+        --accent:#2dd4bf; --quote:#1c212b; --l:62%; --tick:#05070a;
+        --same-bar:#555b66; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
        font:16px/1.55 Inter, -apple-system, 'Helvetica Neue', sans-serif; }
@@ -273,7 +274,6 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
 
 #scorecard { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
              padding: 36px 40px 28px; }
-.sc-top { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; }
 .sc-title { font: 800 44px/1 'SF Mono', Menlo, monospace; margin: 0; }
 .sc-sub { color: var(--muted); margin: 10px 0 28px; max-width: 46em; }
 .sc-head { font-size: 26px; line-height: 1.35; font-weight: 600; margin: 0 0 18px; }
@@ -296,8 +296,10 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
 .h3-sub { font-size: 13px; color: var(--muted); margin: -6px 0 8px; }
 .cat-meta { display: flex; align-items: center; gap: 10px; font-size: 12.5px; margin-top: 4px; }
 .cat-meta .count { flex: none; font-weight: 600; min-width: 7.5em; }
-.bar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; flex: none; max-width: 40%; }
-.seg.better { background: var(--better); } .seg.same { background: var(--same); opacity: .5; }
+.bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; flex: none;
+       max-width: 45%; border: 1.5px solid var(--tick); }
+.seg { flex: 1; } .seg + .seg { border-left: 1.5px solid var(--tick); }
+.seg.better { background: var(--better); } .seg.same { background: var(--same-bar); }
 .seg.worse { background: var(--worse); }
 .cats-same { margin-top: 22px; }
 .cats-same ul { columns: 2; column-gap: 28px; }
@@ -305,8 +307,7 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
 .cats-same li { break-inside: avoid; }
 .cats .none { color: var(--muted); padding: 7px 0; border-top: 1px solid var(--line); }
 .unchanged { font-size: 14px; color: var(--muted); margin-top: 14px; }
-.sc-foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-           margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line);
+.sc-foot { margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line);
            font-size: 13px; color: var(--muted); }
 .actions { display: flex; justify-content: flex-end; margin: 10px 0 40px; }
 button { font: 600 14px/1 Inter, -apple-system, sans-serif; padding: 10px 14px; border-radius: 8px;
@@ -356,9 +357,7 @@ def _cat_item(i: dict) -> str:
         return f"<li><div class='cat-row'><span>{esc(i['complaint'])}</span>{scores}</div></li>"
     t = i["tally"]
     segs = "".join(
-        f"<span class='seg {k}' style='flex:{t[k]}'></span>"
-        for k in ("better", "same", "worse")
-        if t[k]
+        f"<span class='seg {k}'></span>" for k in ("better", "same", "worse") for _ in range(t[k])
     )
     parts = [
         f"{t[k]} {k if k != 'same' else 'the same'}" for k in ("better", "same", "worse") if t[k]
@@ -366,7 +365,7 @@ def _cat_item(i: dict) -> str:
     return (
         f"<li><div class='cat-row'><span>{esc(i['complaint'])}</span>{scores}</div>"
         f"<div class='cat-meta'><span class='count'>{i['n']} transcript{'s' * (i['n'] != 1)}</span>"
-        f"<span class='bar' style='width:{min(100, 8 + 6 * i['n'])}%'>{segs}</span>"
+        f"<span class='bar' style='width:{16 * i['n']}px'>{segs}</span>"
         f"<span class='muted'>{', '.join(parts)}</span></div></li>"
     )
 
@@ -416,13 +415,12 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
             f"<div><div class='who'>{esc(old_who)}</div>{_score(old_mean, big=True)}</div>"
             "<div class='arrow'>→</div>"
             f"<div><div class='who'>{esc(pretty_model(new))}</div>{_score(s['newMean'], big=True)}</div>"
-            "<div class='who' style='margin-left:auto;max-width:17em'>average score, where 10 means "
-            "the complaint no longer applies</div></div>"
+            "<div class='who' style='margin-left:auto'>average judge score,<br>"
+            "0 → problematic, 10 → fixed</div></div>"
         )
     return f"""
 <div id="scorecard">
-  <div class="sc-top"><h1 class="sc-title">/bad</h1>
-    <span class="muted">{_pretty_date(when)}</span></div>
+  <h1 class="sc-title">/bad</h1>
   <p class="sc-sub">A personal benchmark. Each transcript is a moment where an AI model's reply
     annoyed me, with a note saying why. The same moment is re-run on the new model and on the old
     one, and a judge that doesn't know which is which scores each reply against my note.</p>
@@ -441,8 +439,7 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
   </div>
   {unchanged}
   {legend}
-  <div class="sc-foot"><span>judged blind by {esc(pretty_model(s["judge"] or judge))}</span>
-    <span>slash-bad · your personal benchmark for the things you actually care about</span></div>
+  <div class="sc-foot">Judge: {esc(pretty_model(s["judge"] or judge))}, {_pretty_date(when)}</div>
 </div>"""
 
 
