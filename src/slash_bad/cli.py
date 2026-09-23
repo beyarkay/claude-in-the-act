@@ -16,7 +16,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from slash_bad import CASES_DIR, HOME, claude_code, codex, compare, hook, llm, report
+from slash_bad import CASES_DIR, HOME, REPORTS_DIR, claude_code, codex, compare, hook, llm, report
 from slash_bad.store import Case, all_cases, find_case
 
 CONFIG = HOME / "config.json"
@@ -117,11 +117,8 @@ def cmd_compare(args) -> int:
         print(f"no cases can run on {args.model} (wrong harness?)", file=sys.stderr)
         return 1
     print(report.terminal(rows, judge_model))
-    paths = report.write_all(rows, judge_model, show_complaints=not args.hide_complaints)
-    print()
-    for kind in ("png", "svg", "html"):
-        if kind in paths:
-            print(f"{kind:>5}: {paths[kind]}")
+    paths = report.write_all(rows, judge_model)
+    print(f"\nscorecard: {paths['html']}")
     if args.open and "html" in paths:
         webbrowser.open(paths["html"].as_uri())
     return 0
@@ -150,6 +147,19 @@ def cmd_behaviours(args) -> int:
         print(f"{b['name']} ({len(members)}): {b.get('description', '')}")
         for c in members:
             print(f"    {c.id}  {' '.join(c.complaint.split())[:90]}")
+    return 0
+
+
+def cmd_report(args) -> int:
+    paths = sorted(REPORTS_DIR.glob("*.json"))
+    path = Path(args.report).expanduser() if args.report else (paths[-1] if paths else None)
+    if path is None:
+        print("no reports yet; run `slash-bad compare latest` first", file=sys.stderr)
+        return 1
+    page = report.rerender(path)
+    print(page)
+    if args.open:
+        webbrowser.open(page.as_uri())
     return 0
 
 
@@ -263,11 +273,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--fresh", action="store_true", help="re-run replays instead of reusing cached ones"
     )
-    p.add_argument(
-        "--hide-complaints", action="store_true", help="leave complaint text off the share card"
-    )
     p.add_argument("--open", action="store_true", help="open the HTML report when done")
     p.set_defaults(fn=cmd_compare)
+
+    p = sub.add_parser("report", help="rebuild a scorecard page from a saved report")
+    p.add_argument("report", nargs="?", help="a report .json (default: the latest)")
+    p.add_argument("--open", action="store_true")
+    p.set_defaults(fn=cmd_report)
 
     p = sub.add_parser("baseline", help="judge the stored bad responses only (cheap)")
     p.add_argument("cases", nargs="*")

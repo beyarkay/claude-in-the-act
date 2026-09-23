@@ -95,13 +95,28 @@ def test_response_for_variants():
 
 def test_reports_render(case, fakes, tmp_path, monkeypatch):
     monkeypatch.setattr(report, "REPORTS_DIR", tmp_path / "reports")
-    monkeypatch.setattr(report, "svg_to_png", lambda p: None)
     rows = [compare.compare_case(case, "new-model", "opus", "deny", "http://proxy", fresh=False)]
     text = report.terminal(rows, "opus", color=False)
-    assert "better   1" in text and "claude-opus-5 again" in text
+    assert "better   1" in text and "1 transcripts" in text
     paths = report.write_all(rows, "opus")
-    assert "<svg" in paths["svg"].read_text()
-    assert "server is up" in paths["html"].read_text()
+    page = paths["html"].read_text()
+    assert "server is up" in page and 'id="scorecard"' in page
+    assert report.rerender(paths["json"]).read_text() == page
+
+
+@pytest.mark.parametrize(
+    "raw,want",
+    [
+        ("claude-opus-5-5", "Claude Opus 5.5"),
+        ("claude-sonnet-5", "Claude Sonnet 5"),
+        ("claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+        ("gpt-6-sol", "GPT-6 Sol"),
+        ("gpt-5.6-sol", "GPT-5.6 Sol"),
+        ("opus", "opus"),
+    ],
+)
+def test_pretty_model(raw, want):
+    assert report.pretty_model(raw) == want
 
 
 def test_judge_parse():
