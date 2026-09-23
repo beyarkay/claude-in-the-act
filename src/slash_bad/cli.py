@@ -247,7 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument(
         "--judge",
         help="judge model (default: latest Opus via Claude Code, or Codex's default model if "
-        "only Codex is installed; codex:<model> judges with Codex)",
+        "only Codex is installed; codex:<model> judges with Codex; luna or "
+        "openrouter:<model> judges through OpenRouter with OPENROUTER_API_KEY)",
     )
     p.add_argument(
         "--variant",
