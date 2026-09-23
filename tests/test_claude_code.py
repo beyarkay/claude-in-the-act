@@ -87,3 +87,17 @@ def test_faithful_request_ends_where_the_context_ends():
     dropped = {"messages": [{"role": "user", "content": "what does it do?"}]}
     assert claude_code.faithful(good, ctx)
     assert not claude_code.faithful(dropped, ctx)
+
+
+def test_a_long_session_is_replayed_with_the_long_window():
+    from conftest import cc_assistant, cc_user
+
+    small = cc_assistant([{"type": "text", "text": "ok"}], "a1")
+    small["message"]["usage"] = {"input_tokens": 5, "cache_read_input_tokens": 90_000}
+    big = cc_assistant([{"type": "text", "text": "ok"}], "a2")
+    big["message"]["usage"] = {"input_tokens": 5, "cache_read_input_tokens": 400_000}
+    assert claude_code.replay_model("claude-opus-4-8", [cc_user("hi"), small]) == "claude-opus-4-8"
+    assert (
+        claude_code.replay_model("claude-opus-4-8", [cc_user("hi"), small, big])
+        == "claude-opus-4-8[1m]"
+    )

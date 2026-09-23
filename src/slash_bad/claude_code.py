@@ -245,6 +245,38 @@ def resolve_model(model: str) -> str:
 
 
 REQUEST_FILE = "request.json"
+STANDARD_WINDOW = 190_000  # tokens; a session that sent more ran with the 1M-token window
+
+
+def peak_request_tokens(context: list[dict]) -> int:
+    """The largest request the original session sent, from its own usage records."""
+    peak = 0
+    for r in context:
+        usage = (
+            (r.get("message") or {}).get("usage") if isinstance(r.get("message"), dict) else None
+        )
+        if r.get("type") == "assistant" and usage:
+            peak = max(
+                peak,
+                sum(
+                    usage.get(k) or 0
+                    for k in (
+                        "input_tokens",
+                        "cache_read_input_tokens",
+                        "cache_creation_input_tokens",
+                    )
+                ),
+            )
+    return peak
+
+
+def replay_model(model: str, context: list[dict]) -> str:
+    """``model`` with the 1M-token window if the original session needed it; with the
+    standard window Claude Code would compact the conversation on resume."""
+    name = resolve_model(model)
+    if peak_request_tokens(context) > STANDARD_WINDOW and not name.endswith("[1m]"):
+        return name + "[1m]"
+    return name
 
 
 def _last_marker(context: list[dict]) -> str:
@@ -302,7 +334,7 @@ def replay(case: Case, model: str, proxy_url: str, max_turns: int = 4) -> dict:
         "--resume",
         sid,
         "--model",
-        resolve_model(model),
+        replay_model(model, context),
         "--output-format",
         "json",
         "--max-turns",
