@@ -31,6 +31,12 @@ MARK = {
     "not-reproduced": "○",
 }
 SKIPPED = ("error", "unmatched", "same-model", "rejected", "not-reproduced")
+WARN_ICON = (
+    "<svg class='icon' viewBox='0 0 24 24' aria-hidden='true'><path d='M12 3.5 1.8 20.5h20.4Z' "
+    "fill='none' stroke='currentColor' stroke-width='2' stroke-linejoin='round'/>"
+    "<path d='M12 9.5v5' stroke='currentColor' stroke-width='2' stroke-linecap='round'/>"
+    "<circle cx='12' cy='17.6' r='1.2' fill='currentColor'/></svg>"
+)
 LABEL = {"same": "no improvement", "not-reproduced": "couldn't reproduce"}
 COUNT_ORDER = ("better", "worse", "same", "not-reproduced", "rejected")
 WHY_SKIPPED = {
@@ -284,13 +290,13 @@ def _pretty_date(when: datetime) -> str:
 
 _CSS = """
 :root { --bg:#f6f4f0; --fg:#1d1f23; --muted:#6b7079; --line:#e3dfd8; --card:#fff;
-        --better:#15803d; --worse:#b91c1c; --same:#a25555; --warn:#b45309; --claude:#d97757; --accent:#0f766e;
-        --quote:#f1eee8; --l:38%; --tick:#1d1f23; --same-bar:#e2bcbc; }
+        --better:#15803d; --worse:#b91c1c; --same:#a16207; --warn:#a16207; --claude:#d97757; --accent:#0f766e;
+        --quote:#f1eee8; --l:38%; --tick:#1d1f23; --same-bar:#ecd48f; }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) { --bg:#0e1116; --fg:#eceae6; --muted:#8d93a0; --line:#262b34;
-        --card:#151922; --better:#4ade80; --worse:#f87171; --same:#d9a3a3; --warn:#fbbf24; --claude:#d97757;
+        --card:#151922; --better:#4ade80; --worse:#f87171; --same:#facc15; --warn:#facc15; --claude:#d97757;
         --accent:#2dd4bf; --quote:#1c212b; --l:62%; --tick:#05070a;
-        --same-bar:#6e4b4b; } }
+        --same-bar:#6b5a1e; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
        font:16px/1.55 Inter, -apple-system, 'Helvetica Neue', sans-serif; }
@@ -369,33 +375,40 @@ h2.section { font-size: 20px; margin: 40px 0 4px; }
 .counts { font-size: 14px; font-weight: 600; }
 .case { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
         padding: 12px 16px; margin: 10px 0; }
-.case > summary { display: grid; grid-template-columns: 1em 12.5em minmax(0, 1fr) auto;
-                  align-items: baseline; column-gap: 10px; cursor: pointer; }
-.case > summary .tag { justify-self: start; }
+.case > summary { display: grid; grid-template-columns: 1em 12em minmax(0, 1fr);
+                  align-items: start; column-gap: 12px; cursor: pointer; }
+.status { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.tag.flag { font-weight: 400; display: inline-flex; align-items: center; gap: 5px; }
+.icon { width: 1.05em; height: 1.05em; flex: none; }
 .case-title { flex: 1; min-width: 0; }
+.case[open] .short, .case:not([open]) .full { display: none; }
 .case-scores { font: 600 13px/1 'SF Mono', Menlo, monospace; color: var(--muted); white-space: nowrap; }
 .case[open] > summary { margin-bottom: 8px; }
 .tag { font: 600 13px/1 'SF Mono', Menlo, monospace; white-space: nowrap; }
 .tag.pill { padding: 4px 8px; border-radius: 999px; }
 .case-scores .score { font-size: 13px; }
 .complaint { color: var(--muted); font-size: 13.5px; margin: 4px 0 14px; }
-.shared { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
+.shared { border: 1px dashed var(--line); border-radius: 10px; padding: 8px 12px; margin-bottom: 12px; }
+.shared > summary { display: flex; gap: 8px; align-items: baseline; cursor: pointer; }
 .shared-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
-                color: var(--muted); margin-bottom: 8px; }
-.shared summary { color: inherit; }
+                color: var(--muted); }
+.shared-peek { color: var(--muted); font-size: 13px; min-width: 0; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
 .then { font-size: 12.5px; color: var(--muted); margin: 6px 0 0 4px; }
-.fork { font-size: 12.5px; color: var(--muted); margin-top: 8px; text-align: center; }
 .bubble { border-radius: 14px; padding: 10px 14px; font-size: 14px; overflow-wrap: anywhere; }
-.bubble.user { background: var(--quote); margin-left: auto; max-width: 85%; width: fit-content; }
-.bubble.bot { border: 1px solid var(--line); max-height: 460px; overflow: auto; }
-.replies { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+.bubble.user { background: var(--quote); max-height: 320px; overflow: auto; }
+.bubble.bot { border: 1px solid var(--line); height: 420px; overflow: auto; }
+.bubble-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+                color: var(--muted); margin-bottom: 6px; }
+.replies { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+           grid-template-rows: auto auto auto; column-gap: 14px; }
 @media (max-width: 900px) { .replies { grid-template-columns: 1fr; } }
-.reply { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
-.verdict { background: var(--quote); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
-.verdict-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
-.verdict .why { margin-top: 6px; }
-.verdict .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
-                  color: var(--muted); margin-right: 6px; }
+.reply { display: grid; grid-row: span 3; grid-template-rows: subgrid; row-gap: 8px; min-width: 0; }
+.reply-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+              font-size: 13.5px; }
+.reply .why { background: var(--quote); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
+.reply .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+                color: var(--muted); margin-right: 6px; }
 .rej { font: 700 13px/1 'SF Mono', Menlo, monospace; color: var(--muted); }
 .md { white-space: pre-wrap; }
 .md.rendered { white-space: normal; }
@@ -612,14 +625,14 @@ def _shared(case_id: str) -> str:
         work.append(f"{n} tool call{'s' * (n != 1)} ({names})")
     if said:
         work.append(f"{said} assistant message{'s' * (said != 1)}")
-    body = esc(_one_line(prompt, 400))
-    if len(prompt) > 400:
-        body = f"<details><summary>{body}</summary><div class='md'>{esc(prompt[:8000])}</div></details>"
     then = f"<div class='then'>then {' and '.join(work)}</div>" if work else ""
     return (
-        "<div class='shared'><div class='shared-label'>Shared conversation · identical for all "
-        f"three replies</div><div class='bubble user'>{body}</div>{then}"
-        "<div class='fork'>↓ each reply below continues from exactly here</div></div>"
+        "<details class='shared'><summary><span class='shared-label'>Context</span>"
+        f"<span class='shared-peek'>what you asked: “{esc(_one_line(prompt, 110))}”</span></summary>"
+        "<div class='muted' style='font-size:12.5px;margin:6px 0'>The conversation up to here "
+        "is identical for all three replies below; only the last reply was re-sampled.</div>"
+        f"<div class='bubble user'><div class='bubble-label'>You asked</div>"
+        f"<div class='md'>{esc(prompt[:8000])}</div></div>{then}</details>"
     )
 
 
@@ -629,12 +642,12 @@ def _reply(title: str, model: str, score, why: str, rejected: str, response: str
     note = rejected or why
     return (
         "<div class='reply'>"
-        f"<div class='verdict'><div class='verdict-head'><span><b>{esc(title)}</b>"
+        f"<div class='reply-head'><span><b>{esc(title)}</b>"
         f"<span class='muted'> · {esc(pretty_model(model))}</span></span>{verdict}</div>"
-        + (f"<div class='why'><span class='label'>Judge</span>{esc(note)}</div>" if note else "")
-        + "</div>"
-        f"<div class='bubble bot'><div class='md' data-evidence='{esc(json.dumps(evidence or []))}'>"
-        f"{esc(response or '')}</div></div></div>"
+        f"<div class='bubble bot'><div class='bubble-label'>Model's response</div>"
+        f"<div class='md' data-evidence='{esc(json.dumps(evidence or []))}'>"
+        f"{esc(response or '')}</div></div>"
+        f"<div class='why'><span class='label'>Judge</span>{esc(note or '–')}</div></div>"
     )
 
 
@@ -648,7 +661,7 @@ def _case(r: dict) -> str:
 
     replies = [
         _reply(
-            "Original",
+            "Original reply",
             r["oldModel"],
             r.get("flagged"),
             r.get("oldWhy", ""),
@@ -681,20 +694,23 @@ def _case(r: dict) -> str:
         note = f"<div class='note'>The new model tried to use tools first and was refused: {esc(tried)}</div>"
     scores = " · ".join(_score(r.get(k)) for k in ("flagged", "control", "new"))
     tag = f"{MARK[o]} {esc(LABEL.get(o, o))}"
+    if o in ("not-reproduced", "rejected"):
+        tag = f"{WARN_ICON} {esc(LABEL.get(o, o))}"
     style = ""
     ref, new = r.get("reference"), r.get("new")
     if o in ("better", "same", "worse") and ref is not None and new is not None:
         d = new - ref
         tag += f" {_signed(d, whole=True)}"
-        if o != "same":
-            pct = round(12 + 48 * min(1.0, abs(d) / 9))
-            style = f" style='background: color-mix(in srgb, var(--{o}) {pct}%, transparent)'"
+        pct = 18 if o == "same" else round(12 + 48 * min(1.0, abs(d) / 9))
+        style = f" style='background: color-mix(in srgb, var(--{o}) {pct}%, transparent)'"
+    kind = "pill" if style else "flag"
     return (
-        f"<details class='case'><summary><span class='tag pill {o}'{style}>{tag}"
-        f"</span><span class='case-title'>{esc(_one_line(r['complaint'], 120))}</span>"
-        f"<span class='case-scores' title='original · old model asked again · new model'>"
-        f"{scores}</span></summary>"
-        f"<div class='complaint'>User complaint: {esc(r['complaint'])}</div>"
+        f"<details class='case'><summary><span class='status'><span class='tag {kind} {o}'{style}>"
+        f"{tag}</span><span class='case-scores' title='original · old model asked again · new "
+        f"model'>{scores}</span></span>"
+        f"<span class='case-title'><span class='short'>{esc(_one_line(r['complaint'], 160))}</span>"
+        f"<span class='full'><span class='muted'>User complaint: </span>{esc(r['complaint'])}"
+        "</span></span></summary>"
         f"{_shared(r['case'])}<div class='replies'>{''.join(replies)}</div>{note}</details>"
     )
 
