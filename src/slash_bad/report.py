@@ -31,10 +31,12 @@ MARK = {
     "not-reproduced": "○",
 }
 SKIPPED = ("error", "unmatched", "same-model", "rejected", "not-reproduced")
+LABEL = {"same": "the same", "not-reproduced": "couldn't reproduce complaint"}
+COUNT_ORDER = ("better", "worse", "same", "not-reproduced", "rejected")
 WHY_SKIPPED = {
     "unmatched": "the judge couldn't find the complaint in the flagged reply",
     "same-model": "the flagged reply came from the model being tested",
-    "not-reproduced": "the old model, asked again, didn't repeat the problem (scored above 7)",
+    "not-reproduced": "couldn't reproduce the complaint: the old model, asked again, scored above 7",
 }
 
 
@@ -351,10 +353,17 @@ button { font: 600 14px/1 Inter, -apple-system, sans-serif; padding: 10px 14px; 
          border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
 
 h2.section { font-size: 20px; margin: 40px 0 4px; }
+.behaviour { margin: 22px 0; }
+.behaviour > summary { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap;
+                       cursor: pointer; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.behaviour > summary h3 { margin: 0; font-size: 19px; }
+.counts { font-size: 14px; font-weight: 600; }
 .case { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-        padding: 18px 20px; margin: 18px 0; }
-.case-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
-.case-head h3 { margin: 0; font-size: 18px; }
+        padding: 12px 16px; margin: 10px 0; }
+.case > summary { display: flex; align-items: baseline; gap: 12px; cursor: pointer; }
+.case-title { flex: 1; min-width: 0; }
+.case-scores { font: 600 13px/1 'SF Mono', Menlo, monospace; color: var(--muted); white-space: nowrap; }
+.case[open] > summary { margin-bottom: 8px; }
 .tag { font: 600 13px/1 'SF Mono', Menlo, monospace; white-space: nowrap; }
 .tag.rejected, .tag.not-reproduced { color: var(--muted); }
 .complaint { color: var(--muted); font-size: 13.5px; margin: 4px 0 14px; }
@@ -385,7 +394,7 @@ h2.section { font-size: 20px; margin: 40px 0 4px; }
 .md h1, .md h2, .md h3 { font-size: 15px; margin: 12px 0 4px; }
 mark { background: color-mix(in srgb, var(--worse) 28%, transparent); color: inherit; border-radius: 3px; }
 .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
-details { margin-top: 32px; } summary { cursor: pointer; color: var(--muted); }
+.not-replayed { margin-top: 32px; } .not-replayed > summary { cursor: pointer; color: var(--muted); }
 """
 
 _MD_JS = """
@@ -651,14 +660,36 @@ def _case(r: dict) -> str:
     if r.get("toolAttempts"):
         tried = "; ".join(_one_line(a, 80) for a in r["toolAttempts"][:3])
         note = f"<div class='note'>The new model tried to use tools first and was refused: {esc(tried)}</div>"
-    label = {"not-reproduced": "not reproduced"}.get(o, o)
-    title = r.get("behaviour") or _one_line(r["complaint"], 90)
+    scores = " · ".join(fmt(r.get(k)) for k in ("flagged", "control", "new"))
     return (
-        f"<section class='case'><div class='case-head'><h3>{esc(title)}</h3>"
-        f"<span class='tag {o}'>{MARK[o]} {esc(label)}</span></div>"
+        f"<details class='case'><summary><span class='tag {o}'>{MARK[o]} {esc(LABEL.get(o, o))}"
+        f"</span><span class='case-title'>{esc(_one_line(r['complaint'], 120))}</span>"
+        f"<span class='case-scores' title='original · old model asked again · new model'>"
+        f"{scores}</span></summary>"
         f"<div class='complaint'>User complaint: {esc(r['complaint'])}</div>"
-        f"{_shared(r['case'])}<div class='replies'>{''.join(replies)}</div>{note}</section>"
+        f"{_shared(r['case'])}<div class='replies'>{''.join(replies)}</div>{note}</details>"
     )
+
+
+def _behaviour_sections(rows: list[dict]) -> str:
+    esc = html.escape
+    by: dict[str, list[dict]] = {}
+    for r in rows:
+        by.setdefault(r.get("behaviour") or "no behaviour assigned", []).append(r)
+    rank = {g["complaint"]: ("better", "worse", "same").index(g["outcome"]) for g in groups(rows)}
+    out = []
+    for name, rs in sorted(by.items(), key=lambda kv: (rank.get(kv[0], 3), -len(kv[1]))):
+        n = Counter(r["outcome"] for r in rs)
+        counts = ", ".join(
+            f"<span class='{k}'>{n[k]} {LABEL.get(k, k)}</span>" for k in COUNT_ORDER if n[k]
+        )
+        out.append(
+            f"<details class='behaviour' open><summary><h3>{esc(name)}</h3>"
+            f"<span class='counts'>{counts}</span></summary>"
+            + "".join(_case(r) for r in _ordered(rs))
+            + "</details>"
+        )
+    return "".join(out)
 
 
 def html_report(rows: list[dict], judge: str, when: datetime | None = None) -> str:
@@ -666,24 +697,19 @@ def html_report(rows: list[dict], judge: str, when: datetime | None = None) -> s
     when = when or datetime.now(timezone.utc)
     s = summary(rows)
     name = f"slash-bad-{s['newModel'] or 'model'}-{when:%Y-%m-%d}.png"
-    scored = [r for r in _ordered(rows) if r["outcome"] not in SKIPPED]
-    skipped = [r for r in rows if r["outcome"] in SKIPPED]
+    replayed = [r for r in rows if r["outcome"] not in ("error", "unmatched", "same-model")]
+    listed = [r for r in rows if r not in replayed]
     parts = [
         "<!doctype html><html lang='en'><head><meta charset='utf-8'>",
         "<meta name='viewport' content='width=device-width, initial-scale=1'>",
         f"<title>/bad scorecard</title><style>{_CSS}</style></head><body><main>",
         _scorecard(rows, judge, when),
         f"<div class='actions'><button id='save-png' data-name='{esc(name)}'>Save as PNG</button></div>",
-        f"<h2 class='section'>Every transcript ({len(scored)})</h2>",
-        "<div class='muted'>Scores are out of 10: 0 means the complaint applies in full, 10 means "
-        "it no longer applies.</div>",
-        *(_case(r) for r in scored),
+        f"<h2 class='section'>Every transcript ({len(replayed)}), by behaviour</h2>",
+        "<div class='muted'>Scores are out of 10 (original · old model asked again · new model): "
+        "0 means the complaint applies in full, 10 means it no longer applies.</div>",
+        _behaviour_sections(replayed),
     ]
-    shown = [r for r in _ordered(skipped) if r["outcome"] in ("rejected", "not-reproduced")]
-    listed = [r for r in skipped if r not in shown]
-    if shown:
-        parts.append(f"<h2 class='section'>Replayed but not counted ({len(shown)})</h2>")
-        parts += [_case(r) for r in shown]
     if listed:
         items = "".join(
             f"<li>“{esc(_one_line(r['complaint'], 140))}”: "
@@ -691,7 +717,8 @@ def html_report(rows: list[dict], judge: str, when: datetime | None = None) -> s
             for r in listed
         )
         parts.append(
-            f"<details><summary>{len(listed)} not replayed</summary><ul>{items}</ul></details>"
+            f"<details class='not-replayed'><summary>{len(listed)} not replayed</summary>"
+            f"<ul>{items}</ul></details>"
         )
     parts.append(f"</main>{_MD_JS}{_SAVE_JS}</body></html>")
     return "\n".join(parts)
@@ -722,6 +749,8 @@ def rerender(data_path: Path) -> Path:
         if data.get("runAt")
         else datetime.fromtimestamp(data_path.stat().st_mtime, timezone.utc)
     )
+    from slash_bad.compare import classify
+
     page = data_path.with_suffix(".html")
-    page.write_text(html_report(data["rows"], data["judge"], when))
+    page.write_text(html_report([classify(r) for r in data["rows"]], data["judge"], when))
     return page

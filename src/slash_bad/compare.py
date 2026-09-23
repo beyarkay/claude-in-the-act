@@ -265,7 +265,18 @@ def compare_case(
     ):
         if verdict.get("rejected"):
             return {**row, "outcome": "rejected", "rejected": f"{who}: {verdict['rejected']}"}
-    if has_control and reference is not None and reference > REPRODUCED_AT_MOST:
+    return classify(row)
+
+
+def classify(row: dict) -> dict:
+    """Skip a scored row whose old model, asked again, didn't repeat the problem."""
+    ref = row.get("reference")
+    if (
+        row.get("outcome") in ("better", "same", "worse")
+        and row.get("vs") == "control"
+        and ref is not None
+        and ref > REPRODUCED_AT_MOST
+    ):
         return {**row, "outcome": "not-reproduced"}
     return row
 
