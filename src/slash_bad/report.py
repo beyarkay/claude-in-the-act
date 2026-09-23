@@ -69,8 +69,10 @@ def summary(rows: list[dict]) -> dict:
 
 def groups(rows: list[dict]) -> list[dict]:
     """Rows pooled by behaviour: mean scores and one outcome per behaviour."""
+    from slash_bad.behaviours import goals
     from slash_bad.compare import GROUP_BETTER_BY, outcome
 
+    wanted = goals()
     by: dict[str, list[dict]] = {}
     for r in rows:
         if r["outcome"] not in SKIPPED and r.get("behaviour"):
@@ -82,6 +84,7 @@ def groups(rows: list[dict]) -> list[dict]:
         out.append(
             {
                 "complaint": name,
+                "goal": wanted.get(name, ""),
                 "n": len(rs),
                 "flagged": _mean([r["flagged"] for r in rs if r.get("flagged") is not None]),
                 "control": _mean(ctl) if len(ctl) == len(rs) else None,
@@ -227,11 +230,6 @@ def pretty_model(name: str) -> str:
     return name
 
 
-def _models_text(names: list[str]) -> str:
-    names = [pretty_model(n) for n in names]
-    return ", ".join(names[:-1]) + " and " + names[-1] if len(names) > 1 else "".join(names)
-
-
 def _model_color(name: str) -> str:
     return "var(--claude)" if name.startswith("claude") else "var(--accent)"
 
@@ -275,14 +273,19 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
 #scorecard { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
              padding: 36px 40px 28px; }
 .sc-title { font: 800 44px/1 'SF Mono', Menlo, monospace; margin: 0; }
-.sc-sub { color: var(--muted); margin: 10px 0 28px; max-width: 46em; }
-.sc-head { font-size: 26px; line-height: 1.35; font-weight: 600; margin: 0 0 18px; }
+.sc-sub { color: var(--muted); margin: 8px 0 24px; }
+.sc-head { font-size: 26px; line-height: 1.35; font-weight: 600; margin: 0 0 14px; }
+.panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 720px) { .panels { grid-template-columns: 1fr; } }
+.panel { padding: 14px 20px 16px; background: var(--quote); border-radius: 12px; }
+.panel-label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 8px;
+               display: flex; justify-content: space-between; gap: 8px; }
+.panel-label span { font-weight: 400; }
 .model { font-weight: 800; }
-.tally { display: flex; gap: 36px; margin: 0 0 8px; flex-wrap: wrap; }
-.tally div { font-size: 18px; font-weight: 600; }
-.tally b { display: block; font-size: 56px; line-height: 1; font-weight: 800; }
-.avg { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; margin: 26px 0 8px;
-       padding: 16px 20px; background: var(--quote); border-radius: 12px; }
+.tally { display: flex; justify-content: space-around; gap: 16px; }
+.tally div { font-size: 15px; font-weight: 600; text-align: center; }
+.tally b { display: block; font-size: 40px; line-height: 1.05; font-weight: 800; }
+.avg { display: flex; align-items: center; justify-content: space-around; gap: 16px; }
 .avg .who { font-size: 14px; color: var(--muted); }
 .avg .arrow { font-size: 26px; color: var(--muted); }
 .cats { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin: 26px 0 8px; }
@@ -313,7 +316,6 @@ main { max-width: 1040px; margin: 0 auto; padding: 32px 16px 80px; }
 @media (max-width: 720px) { .cats-same ul { columns: 1; } }
 .cats-same li { break-inside: avoid; }
 .cats .none { color: var(--muted); padding: 7px 0; border-top: 1px solid var(--line); }
-.unchanged { font-size: 14px; color: var(--muted); margin-top: 14px; }
 .sc-foot { margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line);
            font-size: 13px; color: var(--muted); }
 .actions { display: flex; justify-content: flex-end; margin: 10px 0 40px; }
@@ -366,7 +368,7 @@ def _cat_item(i: dict) -> str:
         f"<small>{_score(i['reference'])} → {_score(i['new'])}</small></span>"
     )
     if "n" not in i:
-        return f"<li><div class='cat-row'><span>{esc(i['complaint'])}</span>{scores}</div></li>"
+        return f"<li><div class='cat-row'><span>“{esc(i['complaint'])}”</span>{scores}</div></li>"
     t = i["tally"]
     segs = "".join(
         f"<span class='seg {k}'></span>" for k in ("better", "same", "worse") for _ in range(t[k])
@@ -375,83 +377,81 @@ def _cat_item(i: dict) -> str:
         f"{t[k]} {k if k != 'same' else 'the same'}" for k in ("better", "same", "worse") if t[k]
     ]
     return (
-        f"<li><div class='cat-row'><span>{esc(i['complaint'])}</span>{scores}</div>"
+        f"<li><div class='cat-row'><span>{esc(i.get('goal') or i['complaint'])}</span>{scores}</div>"
         f"<div class='cat-meta'><span class='count'>{i['n']} transcript{'s' * (i['n'] != 1)}</span>"
         f"<span class='bar' style='width:{16 * i['n']}px'>{segs}</span>"
         f"<span class='muted'>{', '.join(parts)}</span></div></li>"
     )
 
 
+def _short_models(names: list[str]) -> str:
+    pretty = [pretty_model(n) for n in names]
+    if len(pretty) > 2:
+        return "Older models"
+    if all(n.startswith("Claude ") for n in pretty):
+        pretty = [n.removeprefix("Claude ") for n in pretty]
+    return " & ".join(pretty)
+
+
 def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
     esc = html.escape
     s = summary(rows)
     new = s["newModel"]
-    olds = _models_text(s["oldModels"]) or "the old model"
     gs = groups(rows)
-    items = gs if len(gs) >= 2 else [r for r in rows if r["outcome"] not in SKIPPED]
+    grouped = len(gs) >= 2
+    items = gs if grouped else [r for r in rows if r["outcome"] not in SKIPPED]
     by = {k: [i for i in _ordered(items) if i["outcome"] == k] for k in ("better", "worse", "same")}
 
-    def cat_list(key: str) -> str:
-        if not by[key]:
-            return "<div class='none'>none</div>"
-        return "<ul>" + "".join(_cat_item(i) for i in by[key]) + "</ul>"
-
-    grouped = len(gs) >= 2
-    unit = "behaviours" if grouped else "transcripts"
-
-    def heading(key: str, label: str) -> str:
-        n = len(by[key])
+    def section(key: str, label: str) -> str:
         sub = ""
         if grouped:
             k = sum(i["n"] for i in by[key])
-            sub = f"<div class='h3-sub'>{n} of {len(gs)} behaviours · {k} transcript{'s' * (k != 1)}</div>"
-        return f"<h3 class='{key}'>{label} {unit}</h3>{sub}"
-
-    unchanged = ""
-    if by["same"]:
-        unchanged = f"<div class='cats-same'>{heading('same', 'Unchanged')}{cat_list('same')}</div>"
-    legend = ""
-    if grouped:
-        legend = (
-            "<div class='unchanged'>Each behaviour is a group of transcripts with the same kind of "
-            "complaint. The bar splits its transcripts into <span class='better'>better</span>, "
-            "<span class='same'>the same</span> and <span class='worse'>worse</span>; a behaviour "
-            "with many transcripts is stronger evidence than one with a single transcript.</div>"
+            sub = (
+                f"<div class='h3-sub'>{len(by[key])} of {len(gs)} behaviours · "
+                f"{k} transcript{'s' * (k != 1)}</div>"
+            )
+        body = (
+            "<ul>" + "".join(_cat_item(i) for i in by[key]) + "</ul>"
+            if by[key]
+            else "<div class='none'>none</div>"
         )
+        return f"<h3 class='{key}'>{label}</h3>{sub}{body}"
+
+    unchanged = f"<div class='cats-same'>{section('same', 'Unchanged')}</div>" if by["same"] else ""
     avg = ""
     if s["newMean"] is not None:
         old_mean = s["controlMean"] if s["controlled"] else s["flaggedMean"]
-        old_who = olds if s["controlled"] else "the responses you flagged"
+        old_who = _short_models(s["oldModels"]) if s["controlled"] else "Your flagged replies"
         avg = (
-            "<div class='avg'>"
+            "<div class='panel'><div class='panel-label'>Average judge score "
+            "<span>0 = problematic, 10 = fixed</span></div><div class='avg'>"
             f"<div><div class='who'>{esc(old_who)}</div>{_score(old_mean, big=True)}</div>"
             "<div class='arrow'>→</div>"
-            f"<div><div class='who'>{esc(pretty_model(new))}</div>{_score(s['newMean'], big=True)}</div>"
-            "<div class='who' style='margin-left:auto'>average judge score,<br>"
-            "0 → problematic, 10 → fixed</div></div>"
+            f"<div><div class='who'>{esc(pretty_model(new))}</div>"
+            f"{_score(s['newMean'], big=True)}</div></div></div>"
         )
     return f"""
 <div id="scorecard">
   <h1 class="sc-title">/bad</h1>
-  <p class="sc-sub">A personal benchmark built from old transcripts where an AI model's reply
-    annoyed me, each with a note saying why. Every one of those moments is re-sampled on a newer
-    model and on the model that originally wrote it, and a judge that doesn't know which is which
-    scores both replies against my note.</p>
-  <p class="sc-head">Of {s["scored"]} transcripts,
-    <span class="model" style="color:{_model_color(new)}">{esc(pretty_model(new))}</span> scored:</p>
-  <div class="tally">
-    <div class="better"><b>{s["better"]}</b>better</div>
-    <div class="worse"><b>{s["worse"]}</b>worse</div>
-    <div class="same"><b>{s["same"]}</b>the same</div>
+  <p class="sc-sub">Old replies that annoyed me, re-sampled on a newer model and judged blind
+    against my complaint.</p>
+  <p class="sc-head"><span class="model" style="color:{_model_color(new)}">{esc(pretty_model(new))}</span>
+    compared to older models</p>
+  <div class="panels">
+    {avg}
+    <div class="panel"><div class="panel-label">Per-transcript changes
+      <span>{s["scored"]} transcripts</span></div>
+      <div class="tally">
+        <div class="better"><b>{s["better"]}</b>better</div>
+        <div class="worse"><b>{s["worse"]}</b>worse</div>
+        <div class="same"><b>{s["same"]}</b>the same</div>
+      </div></div>
   </div>
-  <div class="muted">at resolving my old complaints about {esc(olds)}</div>
-  {avg}
   <div class="cats">
-    <div>{heading("better", "Better")}{cat_list("better")}</div>
-    <div>{heading("worse", "Worse")}{cat_list("worse")}</div>
+    <div>{section("better", "Improved")}</div>
+    <div>{section("worse", "Regressed")}</div>
   </div>
   {unchanged}
-  {legend}
   <div class="sc-foot">Judge: {esc(pretty_model(s["judge"] or judge))}, {_pretty_date(when)}</div>
 </div>"""
 

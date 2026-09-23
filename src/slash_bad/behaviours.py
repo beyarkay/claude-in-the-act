@@ -26,8 +26,21 @@ Group them by the underlying behaviour the user dislikes. Use {target} behaviour
 </complaints>
 
 Reply with ONLY raw JSON:
-{{"behaviours": [{{"name": "...", "description": "<one sentence>"}}], "assign": {{"<id>": "<behaviour name>"}}}}
-Every id must be assigned, and every assigned name must appear in "behaviours"."""
+{{"behaviours": [{{"name": "...", "description": "<one sentence>", "goal": "<the behaviour the user wants instead>"}}], "assign": {{"<id>": "<behaviour name>"}}}}
+Every id must be assigned, and every assigned name must appear in "behaviours".
+{goal_rule}"""
+
+_GOAL_RULE = """"goal" names what the user wants, phrased positively as something the model does, in a few plain words, so that "the new model improved at <goal>" reads naturally. Examples: "praises the user" → "answers without flattery"; "doesn't explain jargon" → "explains jargon, abbreviations and numbers"; "avoids pushing back" → "pushes back and flags real problems"."""
+
+_GOALS_PROMPT = """Below are behaviours a user dislikes in their AI coding agent.
+
+<behaviours>
+{lines}
+</behaviours>
+
+{goal_rule}
+
+Reply with ONLY raw JSON: {{"goals": {{"<behaviour name, exactly as given>": "<goal>"}}}}"""
 
 
 def _path():
@@ -44,6 +57,23 @@ def load() -> list[dict]:
 def _save(behaviours: list[dict]) -> None:
     HOME.mkdir(parents=True, exist_ok=True)
     _path().write_text(json.dumps({"behaviours": behaviours}, indent=2))
+
+
+def goals() -> dict[str, str]:
+    """``{behaviour name: what the user wants instead}``."""
+    return {b["name"]: b["goal"] for b in load() if b.get("goal")}
+
+
+def _fill_goals(behaviours: list[dict], model: str) -> None:
+    todo = [b for b in behaviours if not b.get("goal")]
+    if not todo:
+        return
+    lines = "\n".join(f"- {b['name']}: {b.get('description', '')}" for b in todo)
+    out = llm.ask_json(_GOALS_PROMPT.format(lines=lines, goal_rule=_GOAL_RULE), model) or {}
+    for b in todo:
+        goal = (out.get("goals") or {}).get(b["name"])
+        if goal:
+            b["goal"] = goal
 
 
 def _ask(prompt: str, model: str) -> dict:
@@ -68,7 +98,8 @@ def assign(cases: list[Case], model: str, regroup: bool = False) -> dict[str, st
                 "</existing-behaviours>\n"
             )
         target = max(3, min(12, round(len(cases) ** 0.5) + 2))
-        out = _ask(_PROMPT.format(target=target, existing=existing, lines=lines), model)
+        prompt = _PROMPT.format(target=target, existing=existing, lines=lines, goal_rule=_GOAL_RULE)
+        out = _ask(prompt, model)
         by_name = {b["name"]: b for b in known}
         for b in out.get("behaviours", []):
             by_name.setdefault(b["name"], b)
@@ -79,5 +110,9 @@ def assign(cases: list[Case], model: str, regroup: bool = False) -> dict[str, st
                 c.meta["behaviour"] = name
                 c.save_meta()
         used = {c.meta.get("behaviour") for c in cases} | {b["name"] for b in known}
-        _save([b for n, b in by_name.items() if n in used])
+        known = [b for n, b in by_name.items() if n in used]
+    if any(not b.get("goal") for b in known):
+        _fill_goals(known, model)
+    if todo or known != load():
+        _save(known)
     return {c.id: c.meta.get("behaviour", "") for c in cases}
