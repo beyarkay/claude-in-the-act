@@ -289,13 +289,13 @@ def _pretty_date(when: datetime) -> str:
 
 
 _CSS = """
-:root { --bg:#f6f4f0; --fg:#1d1f23; --muted:#6b7079; --line:#e3dfd8; --card:#fff;
-        --better:#15803d; --worse:#b91c1c; --same:#a16207; --warn:#a16207; --claude:#d97757; --accent:#0f766e;
-        --quote:#f1eee8; --l:38%; --tick:#1d1f23; --same-bar:#ecd48f; }
+:root { --bg:#f4f6f8; --fg:#20242a; --muted:#626b78; --line:#d9dee7; --card:#ffffff;
+        --better:#18794e; --worse:#b63e48; --same:#8a6500; --warn:#8a6500; --claude:#d97757;
+        --accent:#0f766e; --quote:#f2f4f7; --l:38%; --tick:#20242a; --same-bar:#e6d49a; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) { --bg:#0e1116; --fg:#eceae6; --muted:#8d93a0; --line:#262b34;
-        --card:#151922; --better:#4ade80; --worse:#f87171; --same:#facc15; --warn:#facc15; --claude:#d97757;
-        --accent:#2dd4bf; --quote:#1c212b; --l:62%; --tick:#05070a;
+  :root:not([data-theme="light"]) { --bg:#0d1117; --fg:#f0f2f5; --muted:#a3acb9; --line:#303844;
+        --card:#151a22; --better:#54b87a; --worse:#e06c75; --same:#c9a227; --warn:#c9a227;
+        --claude:#d97757; --accent:#2dd4bf; --quote:#1b222c; --l:62%; --tick:#0d1117;
         --same-bar:#6b5a1e; } }
 * { box-sizing: border-box; }
 body { margin:0; background:var(--bg); color:var(--fg);
@@ -314,55 +314,52 @@ details > summary::before { content: '▸'; color: var(--muted); width: 1em; fle
 details[open] > summary::before { content: '▾'; }
 
 #scorecard { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-             padding: 36px 40px 28px; }
-.sc-title { font: 800 44px/1 'SF Mono', Menlo, monospace; margin: 0; }
-.sc-sub { color: var(--muted); margin: 8px 0 24px; }
-.sc-head { font-size: 26px; line-height: 1.35; font-weight: 600; margin: 0 0 14px; }
+             padding: 32px 40px 30px; font-variant-numeric: tabular-nums; }
+.sc-top { display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }
+.sc-title { font: 750 26px/30px 'SF Mono', Menlo, monospace; }
+.sc-sub { color: var(--muted); font-size: 14px; line-height: 20px; margin-top: 4px; }
+.sc-meta { color: var(--muted); font-size: 12px; line-height: 18px; text-align: right; white-space: nowrap; }
+.sc-head { font-size: 28px; line-height: 34px; font-weight: 700; margin: 26px 0 4px; }
+.model { white-space: nowrap; }
+.logo { height: .8em; width: .8em; vertical-align: -.02em; margin-right: .3em; }
+.sc-compare { color: var(--muted); font-size: 15px; margin-bottom: 22px; }
 .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-@media (max-width: 720px) { .panels { grid-template-columns: 1fr; } }
-.panel { padding: 14px 20px 16px; background: var(--quote); border-radius: 12px; }
-.panel-label { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 8px;
-               display: flex; justify-content: space-between; gap: 8px; }
-.panel-label span { font-weight: 400; }
-.model { font-weight: 800; white-space: nowrap; }
-.logo { height: .9em; width: .9em; vertical-align: -.08em; margin-right: .25em; }
-.scale { text-align: center; font-size: 12px; color: var(--muted); margin-top: 6px; }
-.tally { display: flex; justify-content: space-around; gap: 16px; }
-.tally div { font-size: 15px; font-weight: 600; text-align: center; }
-.tally b { display: block; font-size: 40px; line-height: 1.05; font-weight: 800; }
-.avg { display: flex; align-items: center; justify-content: space-around; gap: 16px; }
-.avg .who { font-size: 14px; color: var(--muted); }
-.avg .arrow { font-size: 26px; color: var(--muted); }
-.cats { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin: 26px 0 8px; }
-@media (max-width: 720px) { .cats { grid-template-columns: 1fr; } #scorecard { padding: 24px 18px; } }
-.cats h3, .cats-same h3 { margin: 0 0 10px; font-size: 15px; text-transform: uppercase; letter-spacing: .06em; }
-.cats ul, .cats-same ul { list-style: none; margin: 0; padding: 0; }
-.cats li, .cats-same li { padding: 7px 0;
-           border-top: 1px solid var(--line); }
-.cat-row { display: flex; justify-content: space-between; gap: 12px; }
-.cat-row > span:last-child { flex: none; white-space: nowrap; }
-.delta { display: flex; flex-direction: column; align-items: center; min-width: 8.5em; }
-.delta b { font: 800 24px/1.1 'SF Mono', Menlo, monospace; }
-.delta small .score { font-size: 11.5px; font-weight: 600; }
-.delta small { color: var(--muted); font-size: 11.5px; }
-.h3-sub { font-size: 13px; color: var(--muted); margin: -6px 0 8px; }
-.cat-row { font-weight: 500; }
-.cat-meta { display: flex; align-items: center; gap: 10px; font-size: 12px; margin-top: 4px;
-            color: var(--muted); opacity: .8; }
-.cat-meta .count { flex: none; min-width: 7.5em; }
-.cat-meta .bar { opacity: .65; }
-.bar { display: flex; height: 12px; border-radius: 6px; overflow: hidden; flex: none;
-       max-width: 45%; border: 1.5px solid var(--tick); }
-.seg { flex: 1; } .seg + .seg { border-left: 1.5px solid var(--tick); }
+@media (max-width: 720px) { .panels { grid-template-columns: 1fr; } #scorecard { padding: 24px 18px; } }
+.panel { padding: 18px 22px; background: var(--quote); border-radius: 12px;
+         display: flex; flex-direction: column; justify-content: space-between; gap: 10px; }
+.panel-label { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em;
+               color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+.panel-label span { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.avg { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; text-align: center; }
+.avg .who { font-size: 13px; color: var(--muted); margin-bottom: 2px; }
+.avg .big { font-size: 38px; line-height: 40px; font-weight: 700; }
+.avg .big small { font-size: 21px; font-weight: 400; color: var(--muted); }
+.avg .arrow { font-size: 22px; color: var(--muted); padding-bottom: 6px; }
+.panel-foot { font-size: 13px; color: var(--muted); text-align: center; }
+.panel-foot span { font-weight: 650; }
+.tally { display: grid; grid-template-columns: repeat(3, 1fr); text-align: center; }
+.tally div { font-size: 13px; }
+.tally b { display: block; font-size: 38px; line-height: 40px; font-weight: 700; }
+.findings { margin-top: 30px; }
+.f-head, .finding { display: grid; grid-template-columns: minmax(0, 1fr) 4.5rem 8.5rem minmax(0, .85fr);
+                    column-gap: 24px; align-items: baseline; }
+.f-head { font-size: 12px; color: var(--muted); padding-bottom: 6px; }
+.f-head span:nth-child(2) { text-align: right; }
+.f-group { margin-top: 18px; }
+.f-group-label { font-size: 12px; font-weight: 650; text-transform: uppercase; letter-spacing: .06em;
+                 padding-bottom: 6px; border-bottom: 1px solid var(--line); }
+.f-group-label span { color: var(--muted); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.finding { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.f-name { font-size: 15px; line-height: 21px; font-weight: 650; }
+.f-delta { font-size: 21px; font-weight: 700; text-align: right; white-space: nowrap; }
+.f-scores { font-size: 13px; white-space: nowrap; }
+.f-scores small { color: var(--muted); }
+.f-evidence { font-size: 13px; color: var(--muted); display: flex; align-items: center; gap: 8px; }
+.bar { display: flex; height: 10px; border-radius: 5px; overflow: hidden; flex: none;
+       border: 1px solid var(--tick); opacity: .8; }
+.seg { flex: 1; } .seg + .seg { border-left: 1px solid var(--tick); }
 .seg.better { background: var(--better); } .seg.same { background: var(--same-bar); }
 .seg.worse { background: var(--worse); }
-.cats-same { margin-top: 22px; }
-.cats-same ul { columns: 2; column-gap: 28px; }
-@media (max-width: 720px) { .cats-same ul { columns: 1; } }
-.cats-same li { break-inside: avoid; }
-.cats .none { color: var(--muted); padding: 7px 0; border-top: 1px solid var(--line); }
-.sc-foot { margin-top: 24px; padding-top: 14px; border-top: 1px solid var(--line);
-           font-size: 13px; color: var(--muted); }
 .actions { display: flex; justify-content: flex-end; margin: 10px 0 40px; }
 button { font: 600 14px/1 Inter, -apple-system, sans-serif; padding: 10px 14px; border-radius: 8px;
          border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
@@ -502,26 +499,30 @@ def _logo(model: str) -> str:
     return (Path(__file__).parent / "assets" / "claude-symbol.svg").read_text().strip()
 
 
-def _cat_item(i: dict) -> str:
+def _finding(i: dict) -> str:
+    """One row of the card's findings table: a behaviour, or a transcript without one."""
     esc = html.escape
     d = i["new"] - i["reference"]
-    scores = (
-        f"<span class='delta'><b class='{i['outcome']}'>{_signed(d)}</b>"
-        f"<small>{_score(i['reference'])} → {_score(i['new'])}</small></span>"
-    )
-    if "n" not in i:
-        return f"<li><div class='cat-row'><span>“{esc(i['complaint'])}”</span>{scores}</div></li>"
-    label = i["complaint"] if i["outcome"] == "worse" else i.get("goal") or i["complaint"]
-    t = i["tally"]
-    segs = "".join(
-        f"<span class='seg {k}'></span>" for k in ("better", "same", "worse") for _ in range(t[k])
-    )
-    parts = [f"{t[k]} {LABEL.get(k, k)}" for k in ("better", "same", "worse") if t[k]]
+    if "n" in i:
+        name = i["complaint"] if i["outcome"] == "worse" else i.get("goal") or i["complaint"]
+        t = i["tally"]
+        segs = "".join(
+            f"<span class='seg {k}'></span>"
+            for k in ("better", "same", "worse")
+            for _ in range(t[k])
+        )
+        parts = [f"{t[k]} {LABEL.get(k, k)}" for k in ("better", "same", "worse") if t[k]]
+        evidence = (
+            f"<span class='bar' style='width:{min(160, 12 * i['n'])}px'>{segs}</span>"
+            f"<span>{i['n']} transcript{'s' * (i['n'] != 1)} · {', '.join(parts)}</span>"
+        )
+    else:
+        name, evidence = f"“{_one_line(i['complaint'], 90)}”", "<span>1 transcript</span>"
     return (
-        f"<li><div class='cat-row'><span>{esc(label)}</span>{scores}</div>"
-        f"<div class='cat-meta'><span class='count'>{i['n']} transcript{'s' * (i['n'] != 1)}</span>"
-        f"<span class='bar' style='width:{16 * i['n']}px'>{segs}</span>"
-        f"<span class='muted'>{', '.join(parts)}</span></div></li>"
+        f"<div class='finding'><span class='f-name'>{esc(name)}</span>"
+        f"<span class='f-delta {i['outcome']}'>{_signed(d)}</span>"
+        f"<span class='f-scores'>{i['reference']:.1f} → {i['new']:.1f}<small> /10</small></span>"
+        f"<span class='f-evidence'>{evidence}</span></div>"
     )
 
 
@@ -540,64 +541,73 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
     grouped = len(gs) >= 2
     items = gs if grouped else [r for r in rows if r["outcome"] not in SKIPPED]
     by = {k: [i for i in _ordered(items) if i["outcome"] == k] for k in ("better", "worse", "same")}
+    unit = "behaviours" if grouped else "transcripts"
 
-    def section(key: str, label: str) -> str:
-        sub = ""
+    def group(key: str, label: str) -> str:
+        if not by[key]:
+            return ""
+        n = len(by[key])
+        extra = ""
         if grouped:
             k = sum(i["n"] for i in by[key])
-            sub = (
-                f"<div class='h3-sub'>{len(by[key])} of {len(gs)} behaviours · "
-                f"{k} transcript{'s' * (k != 1)}</div>"
-            )
-        body = (
-            "<ul>" + "".join(_cat_item(i) for i in by[key]) + "</ul>"
-            if by[key]
-            else "<div class='none'>none</div>"
+            extra = f" · {k} transcript{'s' * (k != 1)}"
+        return (
+            f"<div class='f-group'><div class='f-group-label {key}'>{label}"
+            f"<span> · {n} {unit[:-1] if n == 1 else unit}{extra}</span></div>"
+            + "".join(_finding(i) for i in by[key])
+            + "</div>"
         )
-        return f"<h3 class='{key}'>{label}</h3>{sub}{body}"
 
-    unchanged = (
-        f"<div class='cats-same'>{section('same', 'No improvement')}</div>" if by["same"] else ""
-    )
+    old_names = _short_models(s["oldModels"])
     avg = ""
     if s["newMean"] is not None:
         old_mean = s["controlMean"] if s["controlled"] else s["flaggedMean"]
-        short = _short_models(s["oldModels"])
-        old_who = " & ".join(short) if len(short) <= 2 else "Older models"
+        old_who = " & ".join(old_names) if len(old_names) <= 2 else "Older models"
         if not s["controlled"]:
             old_who = "Your flagged replies"
+        gain = s["newMean"] - old_mean
         avg = (
-            "<div class='panel'><div class='panel-label'>Average judge score</div><div class='avg'>"
-            f"<div><div class='who'>{esc(old_who)}</div>{_score(old_mean, big=True)}</div>"
-            "<div class='arrow'>→</div>"
-            f"<div><div class='who'>{esc(pretty_model(new))}</div>"
-            f"{_score(s['newMean'], big=True)}</div></div>"
-            "<div class='scale'>0 = problematic, 10 = fixed</div></div>"
+            "<div class='panel'><div class='panel-label'>Average judge score</div>"
+            "<div class='avg'>"
+            f"<div><div class='who'>{esc(old_who)}</div><div class='big'>{old_mean:.1f}"
+            "<small>/10</small></div></div><div class='arrow'>→</div>"
+            f"<div><div class='who'>{esc(pretty_model(new))}</div><div class='big'>"
+            f"{s['newMean']:.1f}<small>/10</small></div></div></div>"
+            f"<div class='panel-foot'><span class='{outcome_word(gain)}'>{_signed(gain)} points"
+            "</span> on average · 0 = problematic, 10 = fixed</div></div>"
         )
+    improved = len(by["better"])
     return f"""
 <div id="scorecard">
-  <h1 class="sc-title">/bad</h1>
-  <p class="sc-sub">Old replies that annoyed me, re-sampled on a newer model and judged blind
-    against my complaint.</p>
-  <p class="sc-head"><span class="model" style="color:{_model_color(new)}">{_logo(new)}{esc(pretty_model(new))}</span>
-    compared to older models ({esc(", ".join(_short_models(s["oldModels"])))})</p>
+  <div class="sc-top">
+    <div><div class="sc-title">/bad</div>
+      <div class="sc-sub">Old replies that annoyed me, re-sampled on a newer model and judged
+        blind against my complaint.</div></div>
+    <div class="sc-meta">Judge: {esc(pretty_model(s["judge"] or judge))}<br>{_pretty_date(when)}</div>
+  </div>
+  <h1 class="sc-head">{_logo(new)}<span class="model" style="color:{_model_color(new)}">{esc(pretty_model(new))}</span>
+    improved on {improved} of {len(items)} {unit}</h1>
+  <div class="sc-compare">compared to older models ({esc(", ".join(old_names))}) ·
+    {s["scored"]} transcripts</div>
   <div class="panels">
     {avg}
-    <div class="panel"><div class="panel-label">Per-transcript changes
-      <span>{s["scored"]} transcripts</span></div>
+    <div class="panel"><div class="panel-label">Transcript outcomes<span>n = {s["scored"]}</span></div>
       <div class="tally">
-        <div class="better"><b>{s["better"]}</b>better</div>
-        <div class="worse"><b>{s["worse"]}</b>worse</div>
-        <div class="same"><b>{s["same"]}</b>no improvement</div>
+        <div class="better"><b>{s["better"]}</b>↑ better</div>
+        <div class="worse"><b>{s["worse"]}</b>↓ worse</div>
+        <div class="same"><b>{s["same"]}</b>– no improvement</div>
       </div></div>
   </div>
-  <div class="cats">
-    <div>{section("better", "Improved")}</div>
-    <div>{section("worse", "Regressed")}</div>
+  <div class="findings">
+    <div class="f-head"><span>{unit.capitalize()}</span><span>Change</span><span>Mean score</span>
+      <span>Evidence</span></div>
+    {group("better", "Improved")}{group("worse", "Regressed")}{group("same", "No improvement")}
   </div>
-  {unchanged}
-  <div class="sc-foot">Judge: {esc(pretty_model(s["judge"] or judge))}, {_pretty_date(when)}</div>
 </div>"""
+
+
+def outcome_word(d: float) -> str:
+    return "better" if d > 0 else "worse" if d < 0 else "same"
 
 
 def _shared(case_id: str) -> str:
