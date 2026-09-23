@@ -268,10 +268,6 @@ def pretty_model(name: str) -> str:
     return name
 
 
-def _model_color(name: str) -> str:
-    return "var(--claude)" if name.startswith("claude") else "var(--accent)"
-
-
 def _score_hue(v: float) -> int:
     return round(120 * max(0.0, min(10.0, v)) / 10)
 
@@ -486,9 +482,9 @@ btn.addEventListener('click', async () => {
 
 
 def _signed(d: float, whole: bool = False) -> str:
-    """``+2.0``, ``−1.5``, or ``0`` for no change (``+2``, ``−1`` with ``whole``)."""
+    """``+2.0``, ``−1.5``, ``0.0`` (``+2``, ``−1``, ``0`` with ``whole``)."""
     if round(d, 1) == 0:
-        return "0"
+        return "0" if whole else "0.0"
     value = fmt(abs(d)) if whole else f"{abs(d):.1f}"
     return f"{'+' if d > 0 else '−'}{value}"
 
@@ -585,7 +581,7 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
         blind against my complaint.</div></div>
     <div class="sc-meta">Judge: {esc(pretty_model(s["judge"] or judge))}<br>{_pretty_date(when)}</div>
   </div>
-  <h1 class="sc-head">{_logo(new)}<span class="model" style="color:{_model_color(new)}">{esc(pretty_model(new))}</span>
+  <h1 class="sc-head">{_logo(new)}<span class="model">{esc(pretty_model(new))}</span>
     improved on {improved} of {len(items)} {unit}</h1>
   <div class="sc-compare">compared to older models ({esc(", ".join(old_names))}) ·
     {s["scored"]} transcripts</div>
