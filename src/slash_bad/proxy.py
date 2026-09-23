@@ -127,8 +127,10 @@ def _as_reminders(messages: list[dict]) -> list[dict]:
 
 def _portable(messages: list[dict]) -> list[dict]:
     """Messages with only role and content: newer models get extra per-message fields
-    (such as an effort setting) that older models' APIs reject."""
-    return [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
+    (such as an effort setting, sometimes in an otherwise empty message) that older
+    models' APIs reject."""
+    kept = [{k: v for k, v in m.items() if k in ("role", "content")} for m in messages]
+    return [m for m in kept if m.get("content")]
 
 
 def _capture(path: Path, obj: dict, context: list[dict]) -> None:
