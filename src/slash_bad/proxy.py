@@ -224,6 +224,11 @@ class SentinelProxy:
                     self.end_headers()
                     self.wfile.write(msg)
                     return
+                if (log := os.environ.get("SLASH_BAD_RATELIMIT_LOG")) and body is not None:
+                    limits = {k: v for k, v in up.headers.items() if "ratelimit" in k.lower()}
+                    if limits:
+                        with open(log, "a") as f:
+                            f.write(json.dumps({"status": up.status, **limits}) + "\n")
                 self.send_response(up.status)
                 for k, v in up.headers.items():
                     if k.lower() not in _HOP_HEADERS and k.lower() != "content-encoding":
