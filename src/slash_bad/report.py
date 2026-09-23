@@ -510,9 +510,14 @@ def _signed(d: float, whole: bool = False) -> str:
 
 
 def _logo(model: str) -> str:
-    if not model.startswith("claude"):
+    name = model.rsplit("/", 1)[-1]
+    if name.startswith("claude"):
+        asset = "claude-symbol.svg"
+    elif name.startswith(("gpt", "o3", "o4", "codex")):
+        asset = "openai-symbol.svg"
+    else:
         return ""
-    return (Path(__file__).parent / "assets" / "claude-symbol.svg").read_text().strip()
+    return (Path(__file__).parent / "assets" / asset).read_text().strip()
 
 
 def _finding(i: dict) -> str:
