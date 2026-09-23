@@ -352,21 +352,88 @@ button { font: 600 14px/1 Inter, -apple-system, sans-serif; padding: 10px 14px; 
 
 h2.section { font-size: 20px; margin: 40px 0 4px; }
 .case { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
-        padding: 18px 20px; margin: 16px 0; }
-.complaint { font-size: 16px; font-weight: 600; margin: 0 0 14px; display: flex; gap: 10px; }
-.complaint .tag { flex: none; }
-.cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-@media (max-width: 720px) { .cols { grid-template-columns: 1fr; } }
-.col-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
-            margin-bottom: 6px; font-size: 14px; font-weight: 600; }
-.resp { font-size: 14px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px;
-        overflow: auto; border-left: 3px solid var(--line); padding: 4px 12px; }
-.judge { margin-top: 10px; padding: 10px 12px; background: var(--quote); border-radius: 8px;
-         font-size: 13.5px; }
-.judge .label { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase;
-                letter-spacing: .07em; color: var(--muted); margin-bottom: 3px; }
+        padding: 18px 20px; margin: 18px 0; }
+.case-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.case-head h3 { margin: 0; font-size: 18px; }
+.tag { font: 600 13px/1 'SF Mono', Menlo, monospace; white-space: nowrap; }
+.tag.rejected, .tag.not-reproduced { color: var(--muted); }
+.complaint { color: var(--muted); font-size: 13.5px; margin: 4px 0 14px; }
+.shared { border: 1px dashed var(--line); border-radius: 10px; padding: 10px 12px; }
+.shared-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+                color: var(--muted); margin-bottom: 8px; }
+.shared summary { color: inherit; }
+.then { font-size: 12.5px; color: var(--muted); margin: 6px 0 0 4px; }
+.fork { font-size: 12.5px; color: var(--muted); margin-top: 8px; text-align: center; }
+.bubble { border-radius: 14px; padding: 10px 14px; font-size: 14px; overflow-wrap: anywhere; }
+.bubble.user { background: var(--quote); margin-left: auto; max-width: 85%; width: fit-content; }
+.bubble.bot { border: 1px solid var(--line); max-height: 460px; overflow: auto; }
+.replies { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-top: 12px; }
+@media (max-width: 900px) { .replies { grid-template-columns: 1fr; } }
+.reply { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.verdict { background: var(--quote); border-radius: 10px; padding: 10px 12px; font-size: 13.5px; }
+.verdict-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
+.verdict .why { margin-top: 6px; }
+.verdict .label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .07em;
+                  color: var(--muted); margin-right: 6px; }
+.rej { font: 700 13px/1 'SF Mono', Menlo, monospace; color: var(--muted); }
+.md { white-space: pre-wrap; }
+.md.rendered { white-space: normal; }
+.md.rendered > :first-child { margin-top: 0; } .md.rendered > :last-child { margin-bottom: 0; }
+.md pre { overflow: auto; background: var(--quote); padding: 8px 10px; border-radius: 6px; font-size: 12.5px; }
+.md code { font-size: .92em; } .md table { border-collapse: collapse; font-size: 12.5px; }
+.md td, .md th { border: 1px solid var(--line); padding: 3px 6px; }
+.md h1, .md h2, .md h3 { font-size: 15px; margin: 12px 0 4px; }
+mark { background: color-mix(in srgb, var(--worse) 28%, transparent); color: inherit; border-radius: 3px; }
 .note { font-size: 13px; color: var(--muted); margin-top: 10px; }
 details { margin-top: 32px; } summary { cursor: pointer; color: var(--muted); }
+"""
+
+_MD_JS = """
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script>
+function plain(s) { return s.replace(/[*`]/g, '').replace(/\\s+/g, ' ').trim(); }
+function highlight(root, quotes) {
+  // Whitespace-collapsed text of every text node, remembering where each char came from.
+  const chars = [];
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  let node;
+  while ((node = walker.nextNode())) {
+    for (let i = 0; i < node.nodeValue.length; i++) {
+      const c = /\\s/.test(node.nodeValue[i]) ? ' ' : node.nodeValue[i];
+      if (c === ' ' && chars.length && chars[chars.length - 1].c === ' ') continue;
+      chars.push({c, node, i});
+    }
+  }
+  const full = chars.map(x => x.c).join('');
+  for (const q of quotes) {
+    let want = plain(q);
+    if (want.length < 4) continue;
+    let at = full.indexOf(want);
+    if (at < 0 && want.length > 40) { want = want.slice(0, 40); at = full.indexOf(want); }
+    if (at < 0) continue;
+    const spans = new Map();
+    for (const x of chars.slice(at, at + want.length)) {
+      const s = spans.get(x.node) || {start: x.i, end: x.i};
+      s.end = x.i; spans.set(x.node, s);
+    }
+    for (const [n, s] of [...spans].reverse()) {
+      const range = document.createRange();
+      range.setStart(n, s.start); range.setEnd(n, s.end + 1);
+      range.surroundContents(document.createElement('mark'));
+    }
+    return highlight(root, quotes.filter(x => x !== q));
+  }
+}
+for (const el of document.querySelectorAll('.md')) {
+  const src = el.textContent;
+  if (window.marked && window.DOMPurify) {
+    el.innerHTML = DOMPurify.sanitize(marked.parse(src, {breaks: true}));
+    el.classList.add('rendered');
+  }
+  try { highlight(el, JSON.parse(el.dataset.evidence || '[]')); } catch (e) {}
+}
+</script>
 """
 
 _SAVE_JS = """
@@ -492,40 +559,105 @@ def _scorecard(rows: list[dict], judge: str, when: datetime) -> str:
 </div>"""
 
 
+def _shared(case_id: str) -> str:
+    """The conversation every model saw: the last user message and what followed it."""
+    from slash_bad import compare
+    from slash_bad.store import find_case
+
+    esc = html.escape
+    try:
+        case = find_case(case_id)
+        steps = compare.HARNESSES[case.harness].steps(case.context)
+    except (KeyError, OSError, ValueError):
+        return ""
+    users = [i for i, s in enumerate(steps) if s["kind"] == "user"]
+    if not users:
+        return ""
+    prompt = steps[users[-1]]["text"].strip()
+    after = steps[users[-1] + 1 :]
+    calls = Counter(s.get("name") or "tool" for s in after if s["kind"] == "tool_call")
+    said = sum(1 for s in after if s["kind"] == "assistant")
+    work = []
+    if calls:
+        n = sum(calls.values())
+        names = ", ".join(f"{k} ×{v}" if v > 1 else k for k, v in calls.most_common(4))
+        work.append(f"{n} tool call{'s' * (n != 1)} ({names})")
+    if said:
+        work.append(f"{said} assistant message{'s' * (said != 1)}")
+    body = esc(_one_line(prompt, 400))
+    if len(prompt) > 400:
+        body = f"<details><summary>{body}</summary><div class='md'>{esc(prompt[:8000])}</div></details>"
+    then = f"<div class='then'>then {' and '.join(work)}</div>" if work else ""
+    return (
+        "<div class='shared'><div class='shared-label'>Shared conversation · identical for all "
+        f"three replies</div><div class='bubble user'>{body}</div>{then}"
+        "<div class='fork'>↓ each reply below continues from exactly here</div></div>"
+    )
+
+
+def _reply(title: str, model: str, score, why: str, rejected: str, response: str, evidence) -> str:
+    esc = html.escape
+    verdict = "<span class='rej'>rejected</span>" if rejected else _score(score)
+    note = rejected or why
+    return (
+        "<div class='reply'>"
+        f"<div class='verdict'><div class='verdict-head'><span><b>{esc(title)}</b>"
+        f"<span class='muted'> · {esc(pretty_model(model))}</span></span>{verdict}</div>"
+        + (f"<div class='why'><span class='label'>Judge</span>{esc(note)}</div>" if note else "")
+        + "</div>"
+        f"<div class='bubble bot'><div class='md' data-evidence='{esc(json.dumps(evidence or []))}'>"
+        f"{esc(response or '')}</div></div></div>"
+    )
+
+
 def _case(r: dict) -> str:
     esc = html.escape
     o = r["outcome"]
-    old_label = pretty_model(r["oldModel"])
-    if r.get("control") is not None:
-        old = (old_label, r["control"], r.get("controlResponse"), r.get("controlWhy"))
-    else:
-        old = (
-            f"{old_label} (the reply you flagged)",
+    rejected = r.get("rejected") or ""
+
+    def rej(who: str) -> str:
+        return rejected.split(": ", 1)[1] if rejected.startswith(who) else ""
+
+    replies = [
+        _reply(
+            "Original",
+            r["oldModel"],
             r.get("flagged"),
-            r.get("oldResponse"),
-            r.get("oldWhy"),
-        )
-    new = (pretty_model(r.get("newModel", "")), r.get("new"), r.get("newResponse"), r.get("newWhy"))
-    cols = ""
-    for who, val, resp, why in (old, new):
-        judge_note = (
-            f"<div class='judge'><span class='label'>Judge's commentary</span>{esc(why)}</div>"
-            if why
-            else ""
-        )
-        cols += (
-            f"<div><div class='col-head'><span>{esc(who)}</span>{_score(val)}</div>"
-            f"<div class='resp'>{esc(resp or '')}</div>{judge_note}</div>"
-        )
+            r.get("oldWhy", ""),
+            rej("the flagged reply"),
+            r.get("oldResponse", ""),
+            r.get("oldEvidence"),
+        ),
+        _reply(
+            "Old model, asked again",
+            r["oldModel"],
+            r.get("control"),
+            r.get("controlWhy") or r.get("controlError") or "",
+            rej("the old model's re-run"),
+            r.get("controlResponse", ""),
+            r.get("controlEvidence"),
+        ),
+        _reply(
+            "New model",
+            r.get("newModel", ""),
+            r.get("new"),
+            r.get("newWhy", ""),
+            rej("the new model's reply"),
+            r.get("newResponse", ""),
+            r.get("newEvidence"),
+        ),
+    ]
     note = ""
     if r.get("toolAttempts"):
-        tried = "; ".join(_one_line(t, 80) for t in r["toolAttempts"][:3])
+        tried = "; ".join(_one_line(a, 80) for a in r["toolAttempts"][:3])
         note = f"<div class='note'>The new model tried to use tools first and was refused: {esc(tried)}</div>"
-    behaviour = f" · {esc(r['behaviour'])}" if r.get("behaviour") else ""
+    label = {"not-reproduced": "not reproduced"}.get(o, o)
+    title = r.get("behaviour") or _one_line(r["complaint"], 90)
     return (
-        f"<section class='case'><p class='complaint'><span class='tag {o}'>{MARK[o]} {o}</span>"
-        f"<span>“{esc(r['complaint'])}”<span class='muted' style='font-weight:400'>{behaviour}</span>"
-        f"</span></p><div class='cols'>{cols}</div>{note}</section>"
+        f"<section class='case'><div class='case-head'><h3>{esc(title)}</h3>"
+        f"<span class='tag {o}'>{MARK[o]} {esc(label)}</span></div>"
+        f"<div class='complaint'>User complaint: {esc(r['complaint'])}</div>"
+        f"{_shared(r['case'])}<div class='replies'>{''.join(replies)}</div>{note}</section>"
     )
 
 
@@ -543,20 +675,25 @@ def html_report(rows: list[dict], judge: str, when: datetime | None = None) -> s
         _scorecard(rows, judge, when),
         f"<div class='actions'><button id='save-png' data-name='{esc(name)}'>Save as PNG</button></div>",
         f"<h2 class='section'>Every transcript ({len(scored)})</h2>",
-        "<div class='muted'>Your note, then the old model's reply and the new model's reply to the "
-        "same moment. Scores are out of 10; 10 means the complaint no longer applies.</div>",
+        "<div class='muted'>Scores are out of 10: 0 means the complaint applies in full, 10 means "
+        "it no longer applies.</div>",
         *(_case(r) for r in scored),
     ]
-    if skipped:
+    shown = [r for r in _ordered(skipped) if r["outcome"] in ("rejected", "not-reproduced")]
+    listed = [r for r in skipped if r not in shown]
+    if shown:
+        parts.append(f"<h2 class='section'>Replayed but not counted ({len(shown)})</h2>")
+        parts += [_case(r) for r in shown]
+    if listed:
         items = "".join(
             f"<li>“{esc(_one_line(r['complaint'], 140))}”: "
-            f"{esc(r.get('error') or r.get('rejected') or WHY_SKIPPED.get(r['outcome'], r['outcome']))}</li>"
-            for r in skipped
+            f"{esc(r.get('error') or WHY_SKIPPED.get(r['outcome'], r['outcome']))}</li>"
+            for r in listed
         )
         parts.append(
-            f"<details><summary>{len(skipped)} skipped</summary><ul>{items}</ul></details>"
+            f"<details><summary>{len(listed)} not replayed</summary><ul>{items}</ul></details>"
         )
-    parts.append(f"</main>{_SAVE_JS}</body></html>")
+    parts.append(f"</main>{_MD_JS}{_SAVE_JS}</body></html>")
     return "\n".join(parts)
 
 
