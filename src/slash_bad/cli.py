@@ -163,6 +163,16 @@ def cmd_report(args) -> int:
     return 0
 
 
+def cmd_status(args) -> int:
+    from slash_bad import status
+
+    page = status.write(args.judge)
+    print(page)
+    if args.open:
+        webbrowser.open(page.as_uri())
+    return 0
+
+
 def cmd_settle(args) -> int:
     from slash_bad import settle
 
@@ -288,6 +298,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("report", nargs="?", help="a report .json (default: the latest)")
     p.add_argument("--open", action="store_true")
     p.set_defaults(fn=cmd_report)
+
+    p = sub.add_parser(
+        "status", help="a page listing every saved transcript and each model's latest score"
+    )
+    p.add_argument("--judge", help="whose scores to show (default: the judge with the most)")
+    p.add_argument("--open", action="store_true")
+    p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("settle", help="re-run the old model and judge one case now")
     p.add_argument("case")

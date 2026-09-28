@@ -813,7 +813,10 @@ def html_report(rows: list[dict], judge: str, when: datetime | None = None) -> s
             f"<details class='not-replayed'><summary>{len(listed)} not replayed</summary>"
             f"<ul>{items}</ul></details>"
         )
-    parts.append(f"</main>{_MD_JS}{_SAVE_JS}</body></html>")
+    from slash_bad import status
+
+    parts.append(status.section(*status.rows(judge)))
+    parts.append(f"</main>{_MD_JS}{_SAVE_JS}{status.TABLE_JS}</body></html>")
     return "\n".join(parts)
 
 
