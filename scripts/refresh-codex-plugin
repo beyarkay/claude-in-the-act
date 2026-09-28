@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Codex runs a copy of the plugin taken at install time; re-copy it when Codex
+# installed slash-bad from this checkout, so hooks run the committed code.
+set -uo pipefail
+command -v codex >/dev/null 2>&1 || exit 0
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+plugins=$(codex plugin list 2>/dev/null)
+grep -q "^slash-bad@slash-bad .*installed.* ${here}\$" <<<"$plugins" || exit 0
+codex plugin add slash-bad@slash-bad >/dev/null && echo "slash-bad: refreshed Codex's copy of the plugin"
